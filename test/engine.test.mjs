@@ -21,6 +21,7 @@ import {
   getIndex,
   followStream,
   audioFor,
+  waveformFor,
   exportCapture,
   run,
   stopAll,
@@ -79,6 +80,27 @@ test("real PCAP index uses bounded pages and keeps original frame numbers", asyn
     capture.index.summary.media.find((s) => s.ssrc === "0x12345678").lost,
     1,
   );
+});
+test("RTP waveform preserves packet timing metadata for playback alignment", async () => {
+  const previousMappings = capture.config.mappings;
+  capture.config.mappings = [{
+    pt: 96,
+    codec: "PCMU",
+    clockRate: 8000,
+    channels: 1,
+    scope: "stream",
+    source: "10.10.0.10",
+    destination: "10.10.0.20",
+    srcPort: 20000,
+    dstPort: 20002,
+    ssrc: "0x12345678",
+  }];
+  const waveform = await waveformFor(capture, 0);
+  capture.config.mappings = previousMappings;
+  assert.ok(waveform.packets.length > 0);
+  assert.ok(Number.isFinite(waveform.duration));
+  assert.ok(Number.isFinite(waveform.packets[0].offset));
+  assert.equal(waveform.startTime, waveform.packets[0].time);
 });
 test("demo capture includes a decodable SIP call flow", async () => {
   const sipIndex = await getIndex(capture, "sip");

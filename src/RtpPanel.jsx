@@ -1,13 +1,17 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   AudioLines,
   Download,
   Headphones,
+  RotateCcw,
   Plus,
   Settings2,
   Trash2,
   TriangleAlert,
+  X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { Modal, Notice, IconButton } from "./ui.jsx";
 import { sizeLabel, downloadBlob } from "./api.js";
@@ -399,6 +403,486 @@ export function DecodeAsEditor({ packet, existing, onSave, onClose }) {
     </Modal>
   );
 }
+
+function formatRelativeClock(seconds) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(safe / 60);
+  const wholeSeconds = Math.floor(safe % 60);
+  const milliseconds = Math.floor((safe % 1) * 1000);
+  return `${minutes}:${String(wholeSeconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+function formatLocalClock(epoch) {
+  if (!Number.isFinite(Number(epoch))) return "--:--:--.---";
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+    hour12: false,
+  }).format(new Date(Number(epoch) * 1000));
+}
+
+function RtpWaveform({
+  data,
+  stream,
+  audio,
+  audioRef,
+  playbackTime,
+  playbackDuration,
+  timeMode,
+  onTimeModeChange,
+  onTimeUpdate,
+  onLoadedMetadata,
+  onSeek,
+  onRestart,
+  onLocatePacket,
+  onClose,
+}) {
+  const [zoom, setZoom] = useState(1);
+  const scrollRef = useRef(null);
+  const axisScrollRef = useRef(null);
+  const [scrollMetrics, setScrollMetrics] = useState({
+    left: 0,
+    viewport: 0,
+    total: 0,
+  });
+  const packets = data?.packets || [];
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return undefined;
+    node.scrollLeft = 0;
+    if (axisScrollRef.current) axisScrollRef.current.scrollLeft = 0;
+    const updateMetrics = () =>
+      setScrollMetrics({
+        left: node.scrollLeft,
+        viewport: node.clientWidth,
+        total: node.scrollWidth,
+      });
+    updateMetrics();
+    return undefined;
+  }, [zoom, packets.length]);
+  if (!packets.length) return null;
+  const width = 1000;
+  const height = 210;
+  const plotLeft = 26;
+  const plotRight = 12;
+  const plotTop = 18;
+  const plotBottom = 28;
+  const plotWidth = width - plotLeft - plotRight;
+  const plotHeight = height - plotTop - plotBottom;
+  const mid = plotTop + plotHeight / 2;
+  const maxLevel = Math.max(
+    1,
+    ...packets.map((packet) => Math.max(Math.abs(packet.min), Math.abs(packet.max))),
+  );
+  const yFor = (value) => mid - (value / maxLevel) * (plotHeight * 0.44);
+  const first = packets[0];
+  const last = packets.at(-1);
+  const firstTime = Number(data.startTime ?? first.time) || 0;
+  const duration = Math.max(
+    0,
+    Number(data.duration) || (Number(last?.time) || 0) - firstTime,
+  );
+  const mediaDuration = playbackDuration || duration;
+  const startEpoch = Number(data.startEpoch ?? first.epoch);
+  const xFor = (packet, index) => {
+    const packetOffset = Number(packet?.offset);
+    const ratio = Number.isFinite(packetOffset) && mediaDuration > 0
+      ? packetOffset / mediaDuration
+      : index / Math.max(1, packets.length - 1);
+    return plotLeft + Math.min(1, Math.max(0, ratio)) * plotWidth;
+  };
+  const playheadRatio = mediaDuration
+    ? Math.min(1, Math.max(0, playbackTime / mediaDuration))
+    : 0;
+  const playheadX = plotLeft + playheadRatio * plotWidth;
+  const formatAxisTime = (packet) =>
+    timeMode === "local" && Number.isFinite(Number(packet?.epoch))
+      ? formatLocalClock(packet.epoch)
+      : formatRelativeClock((Number(packet?.time) || 0) - firstTime);
+  const formatPlaybackTime = () =>
+    timeMode === "local" && Number.isFinite(startEpoch)
+      ? formatLocalClock(startEpoch + playbackTime)
+      : formatRelativeClock(playbackTime);
+  const formatTimelineTime = (seconds) =>
+    timeMode === "local" && Number.isFinite(startEpoch)
+      ? formatLocalClock(startEpoch + seconds)
+      : formatRelativeClock(seconds);
+  const viewportWidth = scrollMetrics.viewport || width;
+  const totalWidth = scrollMetrics.total || width * zoom;
+  const visibleRatio = Math.min(1, viewportWidth / Math.max(viewportWidth, totalWidth));
+  const visibleDuration = mediaDuration * visibleRatio;
+  const maxScroll = Math.max(0, totalWidth - viewportWidth);
+  const scrollRatio = maxScroll ? scrollMetrics.left / maxScroll : 0;
+  const visibleStart = (mediaDuration - visibleDuration) * scrollRatio;
+  const visibleEnd = Math.min(mediaDuration, visibleStart + visibleDuration);
+  const targetTickCount = Math.max(5, Math.min(10, Math.round(viewportWidth / 140)));
+  const rawTickStep = Math.max(0.001, visibleDuration / targetTickCount);
+  const niceTickStep = (value) => {
+    const exponent = 10 ** Math.floor(Math.log10(value));
+    const fraction = value / exponent;
+    const multiplier =
+      fraction <= 1.5 ? 1 : fraction <= 3.5 ? 2 : fraction <= 7.5 ? 5 : 10;
+    return multiplier * exponent;
+  };
+  const tickStep = niceTickStep(rawTickStep);
+  const tickCount = Math.max(1, Math.ceil(mediaDuration / tickStep));
+  const rawTicks = Array.from({ length: tickCount + 1 }, (_, index) => {
+    const seconds = Math.min(mediaDuration, index * tickStep);
+    const ratio = mediaDuration ? seconds / mediaDuration : 0;
+    return {
+      ratio,
+      x: plotLeft + ratio * plotWidth,
+      label: formatTimelineTime(seconds),
+    };
+  });
+  // Keep labels comfortably separated. The final duration marker can land
+  // only a few pixels after the previous "nice" tick (for example 7.000 and
+  // 7.080 seconds), which makes the two labels overlap at the axis edge.
+  const minTickSpacing = timeMode === "local" ? 132 : 72;
+  const ticks = rawTicks.reduce((visibleTicks, tick) => {
+    const previous = visibleTicks.at(-1);
+    if (!previous || tick.x - previous.x >= minTickSpacing) {
+      visibleTicks.push(tick);
+    }
+    return visibleTicks;
+  }, []);
+  function seek(packet) {
+    if (packet?.no == null) return;
+    const offset = Number(packet.offset);
+    onSeek?.(
+      Number.isFinite(offset)
+        ? Math.max(0, offset)
+        : Math.max(0, (Number(packet.time) || firstTime) - firstTime),
+    );
+  }
+  function locate(packet) {
+    if (packet?.no == null) return;
+    seek(packet);
+    onLocatePacket?.(packet.no, stream?.filter);
+  }
+  function handleWaveformScroll(event) {
+    const node = event.currentTarget;
+    if (axisScrollRef.current && axisScrollRef.current.scrollLeft !== node.scrollLeft)
+      axisScrollRef.current.scrollLeft = node.scrollLeft;
+    setScrollMetrics({
+      left: node.scrollLeft,
+      viewport: node.clientWidth,
+      total: node.scrollWidth,
+    });
+  }
+  function handleAxisScroll(event) {
+    const node = event.currentTarget;
+    if (scrollRef.current && scrollRef.current.scrollLeft !== node.scrollLeft)
+      scrollRef.current.scrollLeft = node.scrollLeft;
+  }
+  return (
+    <div
+      className="rtp-media-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="RTP 媒体播放窗口"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose?.();
+      }}
+    >
+      <section
+        className="rtp-waveform-card rtp-media-dialog"
+        aria-label="RTP 音频波形图"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="rtp-waveform-header">
+          <div>
+            <div className="rtp-waveform-title">
+              <AudioLines size={15} />
+              <strong>RTP 媒体播放</strong>
+              <span>{data.codec} · PT {stream?.pts?.join(", ")}</span>
+            </div>
+            <p>播放进度与波形同步；单击预览位置，双击定位对应 RTP 数据包。</p>
+          </div>
+          <div className="rtp-waveform-meta">
+            <span>{packets.length}{data.sampled ? ` / ${data.originalPackets}` : ""} 包</span>
+            <span>{formatPlaybackTime()} / {timeMode === "local" ? formatLocalClock(startEpoch + mediaDuration) : formatRelativeClock(mediaDuration)}</span>
+            {data.sampled && <span>已抽样</span>}
+            <button className="text-button" onClick={onClose} aria-label="关闭媒体播放窗口">
+              <X size={14} />
+              关闭
+            </button>
+          </div>
+        </div>
+        <div className="rtp-waveform-toolbar">
+          <div className="rtp-time-mode" role="group" aria-label="波形时间显示格式">
+            <span>时间</span>
+            <button
+              className={timeMode === "relative" ? "active" : ""}
+              onClick={() => onTimeModeChange?.("relative")}
+            >
+              相对
+            </button>
+            <button
+              className={timeMode === "local" ? "active" : ""}
+              onClick={() => onTimeModeChange?.("local")}
+            >
+              本地
+            </button>
+          </div>
+          <div className="rtp-waveform-zoom-controls" role="group" aria-label="波形缩放">
+            <span>整体</span>
+            <button
+              className="text-button rtp-zoom-button"
+              onClick={() => setZoom((value) => Math.max(1, value / 2))}
+              disabled={zoom <= 1}
+              aria-label="缩小波形"
+            >
+              <ZoomOut size={14} />
+            </button>
+            <strong>{zoom}×</strong>
+            <button
+              className="text-button rtp-zoom-button"
+              onClick={() => setZoom((value) => Math.min(8, value * 2))}
+              disabled={zoom >= 8}
+              aria-label="放大波形"
+            >
+              <ZoomIn size={14} />
+            </button>
+            <button className="text-button" onClick={() => setZoom(1)} disabled={zoom === 1}>
+              复位
+            </button>
+          </div>
+        </div>
+        <div className="rtp-waveform-zoom-status" aria-live="polite">
+          {zoom === 1
+            ? "显示完整波形"
+            : `整体 ${zoom}×（时间轴与振幅）· 当前视窗 ${formatTimelineTime(visibleStart)} – ${formatTimelineTime(visibleEnd)}，可拖动滚动条查看完整音频`}
+        </div>
+        <div className="rtp-waveform-legend">
+          <span><i className="rtp-waveform-swatch audio" />音频能量</span>
+          <span><i className="rtp-waveform-swatch loss" />序列缺口</span>
+          <span className="rtp-waveform-hint">蓝色游标 = 当前播放位置 · 单击预览 · 双击定位 frame.number</span>
+        </div>
+        <div
+          className="rtp-waveform-scroll"
+          ref={scrollRef}
+          onScroll={handleWaveformScroll}
+        >
+          <svg
+            className="rtp-waveform-svg"
+            style={{
+              width: `${zoom * 100}%`,
+              minWidth: `${zoom * 100}%`,
+              height: `${260 * zoom}px`,
+              minHeight: `${260 * zoom}px`,
+              maxWidth: "none",
+            }}
+            viewBox={`0 0 ${width} ${height}`}
+            role="img"
+            aria-label={`${data.codec} RTP 音频波形，单击预览，双击节点定位数据包`}
+          >
+            <rect x="0" y="0" width={width} height={height} className="rtp-waveform-bg" />
+            <line x1={plotLeft} x2={width - plotRight} y1={mid} y2={mid} className="rtp-waveform-zero" />
+            <line x1={plotLeft} x2={plotLeft} y1={plotTop} y2={height - plotBottom} className="rtp-waveform-axis" />
+            {ticks.map((tick) => (
+              <g key={`tick-${tick.ratio}`} className="rtp-waveform-tick-group">
+                <line
+                  x1={tick.x}
+                  x2={tick.x}
+                  y1={plotTop}
+                  y2={height - plotBottom}
+                  className="rtp-waveform-gridline"
+                />
+              </g>
+            ))}
+            {packets.map((packet, index) => {
+              const x = xFor(packet, index);
+              const y1 = yFor(packet.max);
+              const y2 = yFor(packet.min);
+              const lost = packet.lostBefore > 0;
+              return (
+                <g key={`${packet.no}-${packet.seq}-${index}`}>
+                  {lost && (
+                    <rect
+                      x={Math.max(plotLeft, x - 1.5)}
+                      y={plotTop}
+                      width="3"
+                      height={plotHeight}
+                      className="rtp-waveform-loss"
+                      aria-label={`丢失 ${packet.lostBefore} 个 RTP 序号`}
+                    />
+                  )}
+                  <line
+                    x1={x}
+                    x2={x}
+                    y1={Math.min(y1, y2)}
+                    y2={Math.max(y1, y2)}
+                    className={`rtp-waveform-node ${lost ? "has-gap" : ""}`}
+                    onClick={() => seek(packet)}
+                    onDoubleClick={() => locate(packet)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        locate(packet);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`RTP 包 ${packet.no}，序号 ${packet.seq}，${formatAxisTime(packet)}；双击定位`}
+                  />
+                </g>
+              );
+            })}
+            <line
+              x1={playheadX}
+              x2={playheadX}
+              y1={plotTop}
+              y2={height - plotBottom}
+              className="rtp-waveform-playhead"
+              aria-hidden="true"
+            />
+            <circle
+              cx={playheadX}
+              cy={plotTop}
+              r="4"
+              className="rtp-waveform-playhead-dot"
+              aria-hidden="true"
+            />
+            <text x={plotLeft - 6} y={plotTop + 4} textAnchor="end" className="rtp-waveform-label">+</text>
+            <text x={plotLeft - 6} y={mid + 4} textAnchor="end" className="rtp-waveform-label">0</text>
+            <text x={plotLeft - 6} y={height - plotBottom + 4} textAnchor="end" className="rtp-waveform-label">−</text>
+          </svg>
+        </div>
+        <div
+          className="rtp-waveform-axis-scroll"
+          ref={axisScrollRef}
+          onScroll={handleAxisScroll}
+          aria-label="固定时间刻度"
+        >
+          <svg
+            className="rtp-waveform-axis-svg"
+            style={{
+              width: `${zoom * 100}%`,
+              minWidth: `${zoom * 100}%`,
+              maxWidth: "none",
+            }}
+            viewBox={`0 0 ${width * zoom} 36`}
+            aria-hidden="true"
+          >
+            <line
+              x1={plotLeft * zoom}
+              x2={(width - plotRight) * zoom}
+              y1="1"
+              y2="1"
+              className="rtp-waveform-axis-ruler"
+            />
+            {ticks.map((tick) => (
+              <g key={`axis-tick-${tick.ratio}`}>
+                <line
+                  x1={tick.x * zoom}
+                  x2={tick.x * zoom}
+                  y1="1"
+                  y2="7"
+                  className="rtp-waveform-tick"
+                />
+                <text
+                  x={tick.x * zoom}
+                  y="27"
+                  textAnchor={tick.ratio === 0 ? "start" : tick.ratio === 1 ? "end" : "middle"}
+                  className="rtp-waveform-time"
+                >
+                  {tick.label}
+                </text>
+              </g>
+            ))}
+          </svg>
+        </div>
+        <div className="rtp-stream-summary" aria-label="RTP 媒体流摘要">
+          <div className="rtp-stream-summary-title">
+            <span>播放流</span>
+            <span>与 Wireshark RTP Player 一致，先看完整波形，再查看流信息</span>
+          </div>
+          <div className="rtp-stream-summary-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>播放</th>
+                  <th>源地址</th>
+                  <th>源端口</th>
+                  <th>目标地址</th>
+                  <th>目标端口</th>
+                  <th>SSRC</th>
+                  <th>包数</th>
+                  <th>时间跨度</th>
+                  <th>采样率</th>
+                  <th>Payload</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <button
+                      className="rtp-stream-play-button"
+                      onClick={onRestart}
+                      disabled={!audio}
+                      title="从头开始播放当前流"
+                      aria-label="从头开始播放当前流"
+                    >
+                      <Headphones size={13} />
+                    </button>
+                  </td>
+                  <td>{stream?.source || "—"}</td>
+                  <td>{stream?.srcPort ?? "—"}</td>
+                  <td>{stream?.destination || "—"}</td>
+                  <td>{stream?.dstPort ?? "—"}</td>
+                  <td><code>{stream?.ssrc || "—"}</code></td>
+                  <td>{stream?.packets ?? packets.length}</td>
+                  <td>{formatRelativeClock(mediaDuration)}</td>
+                  <td>{data.clockRate || stream?.clockRate || "—"} Hz</td>
+                  <td>{data.codec || "—"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="rtp-waveform-player">
+          <Headphones size={16} />
+          <button
+            className="button secondary rtp-restart-button"
+            onClick={onRestart}
+            disabled={!audio}
+            title="从头开始播放"
+            aria-label="从头开始播放"
+          >
+            <RotateCcw size={14} />
+          </button>
+          <audio
+            ref={audioRef}
+            controls
+            src={audio?.url}
+            onTimeUpdate={onTimeUpdate}
+            onLoadedMetadata={onLoadedMetadata}
+          />
+          {audio && (
+            <button
+              className="button secondary"
+              onClick={() => downloadBlob(audio.blob, audio.name)}
+            >
+              <Download size={14} />
+              下载 WAV
+            </button>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function RtpPanel({
   capture,
   onFilter,
@@ -406,11 +890,22 @@ export default function RtpPanel({
   onDetect,
   onRemove,
   onError,
+  onLocatePacket,
 }) {
+  const audioRef = useRef(null);
   const [audio, setAudio] = useState(null),
-    [loading, setLoading] = useState(null);
+    [waveform, setWaveform] = useState(null),
+    [mediaLoading, setMediaLoading] = useState(null),
+    [playbackTime, setPlaybackTime] = useState(0),
+    [playbackDuration, setPlaybackDuration] = useState(0),
+    [timeMode, setTimeMode] = useState("relative");
   useEffect(() => {
     setAudio(null);
+    setWaveform(null);
+    setMediaLoading(null);
+    setPlaybackTime(0);
+    setPlaybackDuration(0);
+    setTimeMode("relative");
   }, [capture.id, capture.revision]);
   useEffect(
     () => () => {
@@ -419,28 +914,62 @@ export default function RtpPanel({
     [audio],
   );
   const streams = capture.summary?.media || [];
-  async function play(index) {
-    setLoading(index);
+  const closeMedia = useCallback(() => {
+    setAudio(null);
+    setWaveform(null);
+    setPlaybackTime(0);
+    setPlaybackDuration(0);
+    setTimeMode("relative");
+  }, []);
+  async function openMedia(index) {
+    if (audio?.index === index && waveform?.stream === index) {
+      closeMedia();
+      return;
+    }
+    setMediaLoading(index);
     try {
-      const res = await fetch(
-        `/api/captures/${capture.id}/audio?stream=${index}`,
-      );
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error);
+      const [waveformRes, audioRes] = await Promise.all([
+        fetch(`/api/captures/${capture.id}/waveform?stream=${index}`),
+        fetch(`/api/captures/${capture.id}/audio?stream=${index}`),
+      ]);
+      const waveformData = await waveformRes.json();
+      if (!waveformRes.ok)
+        throw new Error(waveformData.error || "波形生成失败");
+      if (!audioRes.ok) {
+        const data = await audioRes.json();
+        throw new Error(data.error || "音频解码失败");
       }
-      const blob = await res.blob();
+      const blob = await audioRes.blob();
       setAudio({
         index,
         blob,
         url: URL.createObjectURL(blob),
         name: `rtp-${streams[index].ssrc}.wav`,
       });
+      setWaveform(waveformData);
+      setPlaybackTime(0);
+      setPlaybackDuration(0);
     } catch (e) {
       onError(e.message);
     } finally {
-      setLoading(null);
+      setMediaLoading(null);
     }
+  }
+  function syncPlayback(event) {
+    setPlaybackTime(event.currentTarget.currentTime || 0);
+    if (Number.isFinite(event.currentTarget.duration))
+      setPlaybackDuration(event.currentTarget.duration);
+  }
+  function seekPlayback(seconds) {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.max(0, seconds);
+    setPlaybackTime(Math.max(0, seconds));
+  }
+  function restartPlayback() {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = 0;
+    setPlaybackTime(0);
+    audioRef.current.play().catch(() => {});
   }
   return (
     <section className="analysis-content">
@@ -546,16 +1075,20 @@ export default function RtpPanel({
                           数据包
                         </button>
                         <button
-                          className="text-button"
+                          className={`text-button ${audio?.index === i ? "accent-text" : ""}`}
                           disabled={
-                            loading !== null ||
+                            mediaLoading !== null ||
                             s.codecs.some((c) => !["PCMA", "PCMU"].includes(c))
                           }
-                          title="试听支持 PCMA、PCMU"
-                          onClick={() => play(i)}
+                          onClick={() => openMedia(i)}
+                          title="打开独立 RTP 媒体窗口"
                         >
                           <Headphones size={13} />
-                          {loading === i ? "解码中…" : "试听"}
+                          {mediaLoading === i
+                            ? "加载试听…"
+                            : audio?.index === i
+                              ? "收起试听"
+                              : "试听"}
                         </button>
                       </div>
                     </td>
@@ -566,22 +1099,26 @@ export default function RtpPanel({
           </div>
         )}
       </section>
-      {audio && (
-        <div className="audio-preview">
-          <Headphones size={20} />
-          <div>
-            <strong>RTP 音频 · {streams[audio.index]?.ssrc}</strong>
-            <span>G.711 → PCM WAV · 捕获缺口填充静音</span>
-          </div>
-          <audio controls src={audio.url} />
-          <button
-            className="button secondary"
-            onClick={() => downloadBlob(audio.blob, audio.name)}
-          >
-            <Download size={14} />
-            下载 WAV
-          </button>
-        </div>
+      {waveform && (
+        <RtpWaveform
+          data={waveform}
+          stream={streams[waveform.stream]}
+          audio={audio}
+          audioRef={audioRef}
+          playbackTime={playbackTime}
+          playbackDuration={playbackDuration}
+          timeMode={timeMode}
+          onTimeModeChange={setTimeMode}
+          onTimeUpdate={syncPlayback}
+          onLoadedMetadata={(event) => {
+            if (Number.isFinite(event.currentTarget.duration))
+              setPlaybackDuration(event.currentTarget.duration);
+          }}
+          onSeek={seekPlayback}
+          onRestart={restartPlayback}
+          onLocatePacket={onLocatePacket}
+          onClose={closeMedia}
+        />
       )}
       <section className="analysis-card standalone">
         <div className="section-heading">

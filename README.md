@@ -10,7 +10,7 @@ React 网页界面 + Node.js 服务 + 本机 TShark 解析引擎。上传 PCAP/P
 - 在数据包单元格或协议字段上右击：应用、排除、AND、OR、AND NOT、仅准备过滤器；也可显式追踪 TCP/UDP 流、标记数据包。数据包单击查看详情，取消双击追踪以避免误触。
 - TCP/UDP 双向流内容、方向切换、搜索、HEX 与下载；协议分布、流量时间线、会话、端点、专家信息。
 - SIP VoIP 通话时序图：按 Call-ID 分组，支持多会话合并/分组、IP 两端标识、实际时间/相对时间、消息间隔和原始 SIP 报文展开。时序图会沿用当前已应用的过滤器；无过滤器时显示抓包中的全部 SIP 会话。
-- `sip_mrcp.port=12345` ASR/MRCP 关联过滤：从 SIP/SDP 音频端口关联 Call-ID、MRCP Channel-ID、MRCP TCP、RTP/RTCP 流；输入 `sip_mrcp` 时提供语法联想。
+- `sip_mrcp.port=12345` ASR/MRCP 关联过滤：从 SIP/SDP 音频端口关联 Call-ID、MRCP Channel-ID、MRCP TCP、RTP/RTCP 流；输入 `sip_mrcp` 时提供语法联想。宏可以嵌入普通 `AND/OR` 表达式，导出时也会自动展开并应用对应 Decode As。
 - RTP 流列表：源/目标地址和端口、SSRC、PT、编解码、包数、估计丢包、重复包、抖动。
 - 动态 PT 96–127 映射：设置编解码、RTP 时钟频率和声道；默认限定到单条有方向的 RTP 流，也可应用于当前抓包。同一 PT 的不同流可以使用不同编解码，流级映射优先。
 - 将指定 UDP 端口解码为 RTP；可选 RTP 启发式识别。保存映射后重新解析当前文件，失败时恢复上次有效结果。
@@ -18,6 +18,7 @@ React 网页界面 + Node.js 服务 + 本机 TShark 解析引擎。上传 PCAP/P
 - SIP 报文比较：在数据包比较模式中选择两个 SIP 报文，可并排比较 SIP 头域和复杂 SDP 会话描述；支持多媒体段、重复属性、动态 PT、rtpmap/fmtp/rtcp-fb 等字段按媒体段和 PT 对齐，差异与缺失字段会高亮显示。
 - PCMA/PCMU 音频试听和 WAV 导出；原始/过滤后 PCAPNG 导出；当前页 CSV/JSON 导出；浏览器本地备注。
 - 数据包列表支持两行数据包比较；列标题可排序，支持按 Wireshark 常用字段隐藏、删除、添加和调整顺序。
+- 数据包列表排序在服务端对完整结果集执行后再分页，不会只对当前页排序；自定义字段会按需加入索引，列定义可在浏览器刷新后恢复。
 - 数据包列表每页支持 100、200、500、1000 包；列宽可拖拽调整，列顺序、隐藏状态、时间格式和视图设置保存在浏览器本地。
 - 时间列支持 Seconds Since Beginning of Capture、Epoch、Local Date and Time、UTC Date and Time 四种 Wireshark 风格显示格式，布局和时间格式保存在浏览器本地。
 
@@ -65,7 +66,7 @@ TSHARK_PATH='/Applications/Wireshark.app/Contents/MacOS/tshark' npm run dev
 
 ### ASR/MRCP 关联过滤
 
-在过滤器输入框中可使用 `sip_mrcp.port=12345`（也支持 `==`、`eq`，以及 `media_port`/`rtp_port` 别名）。输入 `sip_mrcp` 或 `sip_mrcp.` 会出现联想建议。它不是直接交给 TShark 的普通字段过滤器，而是先从 SDP 的 `m=audio` 端口定位 SIP INVITE，再关联同一 Call-ID 的 SIP Dialog、SDP 中的 MRCPv2 `m=application`/`a=channel`、MRCP TCP 流以及 RTP/RTCP UDP 流。结果会以一个完整 ASR 关联视图分页展示；当同一媒体端口匹配多个 Call-ID 时，界面会提示并合并显示。当前宏过滤器建议单独使用，普通 Wireshark 表达式仍可继续使用。实现会优先使用磁盘索引，旧索引缺少 SIP 正文索引字段时会回退到 TShark 扫描。
+在过滤器输入框中可使用 `sip_mrcp.port=12345`（也支持 `==`、`eq`，以及 `media_port`/`rtp_port` 别名）。输入 `sip_mrcp` 或 `sip_mrcp.` 会出现联想建议。它不是直接交给 TShark 的普通字段过滤器，而是先从 SDP 的 `m=audio` 端口定位 SIP INVITE，再关联同一 Call-ID 的 SIP Dialog、SDP 中的 MRCPv2 `m=application`/`a=channel`、MRCP TCP 流以及 RTP/RTCP UDP 流。结果会以一个完整 ASR 关联视图分页展示；当同一媒体端口匹配多个 Call-ID 时，界面会提示并合并显示。宏也可以嵌入普通 `AND/OR` 表达式，导出时会自动展开并应用对应 Decode As。实现会优先使用磁盘索引，旧索引缺少 SIP 正文索引字段时会回退到 TShark 扫描。
 
 ## SIP VoIP 时序图
 
@@ -148,7 +149,7 @@ node --test test/engine.test.mjs test/http.test.mjs test/amr.test.mjs
 
 - 支持 TShark 能识别的协议，不等于已实现 Wireshark 所有界面与分析功能；TLS 密钥导入/解密、对象导出、完整 RTCP 分析等尚未提供。
 - RTP 丢包由抓包中可见的序列号推算，不能区分网络丢失与抓包遗漏；只有已知时钟频率时才显示抖动。动态载荷的人工映射需与实际媒体一致。
-- G.711 WAV 最长 10 分钟，依据 RTP 时间戳排列、缺失处补静音；不包含高级抖动缓冲、丢包隐藏或双向混音。
-- 每页默认 100 包，也可切换为 200、500、1000；索引写磁盘并缓存过滤结果。默认最多保留 30 个抓包，同时最多 2 个导入任务；超大文件和长期运行的性能仍需专项压测。
+- G.711 WAV 最长 10 分钟，依据 RTP 时间戳排列、缺失处补静音；不包含高级抖动缓冲、丢包隐藏或双向混音。波形计算不再静默截断前 10,000 个包，超过 2,400 个显示点时仅对可视波形降采样，并保留原始包数和 RTP 时间轴。
+- 每页默认 100 包，也可切换为 200、500、1000；索引写磁盘并缓存过滤结果。首次对大结果集使用非默认排序时，会生成临时磁盘排序索引。默认最多保留 30 个抓包，同时最多 2 个导入任务；超大文件和长期运行的性能仍需专项压测。
 - 单次 TShark 文本响应有大小保护；追踪超大的 TCP/UDP 流时需要先用 `tcp.stream`、`udp.stream`、Call-ID 或 ASR/MRCP 端口缩小范围。
 - 统计最多保留 10,000 个会话/端点/RTP 分组，专家信息列表展示前 2,000 项；备注保存在当前浏览器，标记仅在当前界面会话内保留。

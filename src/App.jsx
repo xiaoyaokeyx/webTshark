@@ -8,6 +8,7 @@ import {
   ArrowUpRight,
   AudioLines,
   BookOpen,
+  ChartNoAxesColumnIncreasing,
   Bookmark,
   Check,
   ChevronDown,
@@ -32,7 +33,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Settings2,
   ShieldCheck,
   Star,
   Trash2,
@@ -203,6 +203,27 @@ function readStorage(key, fallback) {
     return fallback;
   }
 }
+function readDynamicColumns() {
+  const stored = readStorage("webshark-dynamic-columns", []);
+  if (!Array.isArray(stored)) return;
+  for (const item of stored) {
+    if (
+      item &&
+      typeof item.id === "string" &&
+      typeof item.field === "string" &&
+      /^[a-zA-Z_][\w.-]*$/.test(item.id) &&
+      /^[a-zA-Z_][\w.-]*$/.test(item.field) &&
+      !columnById.has(item.id)
+    )
+      columnById.set(item.id, {
+        id: item.id,
+        label: item.label || item.field,
+        field: item.field,
+        kind: item.kind || "text",
+      });
+  }
+}
+readDynamicColumns();
 function readSavedViews() {
   const stored = readStorage("webshark-saved-views", []);
   if (!Array.isArray(stored)) return [];
@@ -236,11 +257,16 @@ function columnValue(packet, column) {
   if (column.id === "protocol") return packet.protocol;
   if (column.id === "length") return packet.length;
   if (column.id === "info") return packet.info;
-  if (column.id === "stream") return packet.stream;
-  if (column.id === "tcp.srcport" || column.id === "udp.srcport")
-    return packet.srcPort;
-  if (column.id === "tcp.dstport" || column.id === "udp.dstport")
-    return packet.dstPort;
+  if (column.id === "stream")
+    return packet.transport === "TCP" ? packet.stream : "";
+  if (column.id === "tcp.srcport")
+    return packet.transport === "TCP" ? packet.srcPort : "";
+  if (column.id === "tcp.dstport")
+    return packet.transport === "TCP" ? packet.dstPort : "";
+  if (column.id === "udp.srcport")
+    return packet.transport === "UDP" ? packet.srcPort : "";
+  if (column.id === "udp.dstport")
+    return packet.transport === "UDP" ? packet.dstPort : "";
   if (column.id === "rtp.pt") return packet.rtp?.pt;
   if (column.id === "rtp.ssrc") return packet.rtp?.ssrc;
   if (column.id === "rtp.seq") return packet.rtp?.seq;
@@ -526,7 +552,11 @@ function TrafficChart({ summary, large = false }) {
     });
   const max = Math.max(1, ...points.map((p) => p.bytes));
   return (
-    <div className={`traffic-chart ${large ? "large-chart" : ""}`}>
+    <div
+      className={`traffic-chart ${large ? "large-chart" : ""}`}
+      role="img"
+      aria-label={`流量时间线，总计 ${sizeLabel(summary.bytes)}，持续 ${summary.duration.toFixed(2)} 秒`}
+    >
       <div className="chart-axis">
         <span>{sizeLabel(max)}</span>
         <span>0 B</span>
@@ -659,26 +689,14 @@ export default function App() {
       .map(({ id }) => columnById.get(id))
       .filter(Boolean)
       .filter((column) => !columnState.find((item) => item.id === column.id)?.hidden),
+    requestedFields = [...new Set(visibleColumns.map((column) => column.field).filter(Boolean))],
     comparePackets = compareSelection
       .map((no) => rows.find((p) => p.no === no))
       .filter(Boolean),
     sipCompare = comparePackets.length === 2 && comparePackets.every(isSipPacket),
     ready = capture?.status === "ready";
   const title = nav.find(([id]) => id === view)?.[1] || "数据包分析";
-  const displayRows = [...rows].sort((a, b) => {
-    const column = columnById.get(sort.key) || columnById.get("no");
-    const left = columnValue(a, column),
-      right = columnValue(b, column),
-      leftNumber = Number(left),
-      rightNumber = Number(right),
-      bothNumbers = Number.isFinite(leftNumber) && Number.isFinite(rightNumber);
-    const result = bothNumbers
-      ? leftNumber - rightNumber
-      : String(left ?? "").localeCompare(String(right ?? ""), "zh-CN", {
-          numeric: true,
-        });
-    return (sort.direction === "desc" ? -1 : 1) * result;
-  });
+  const displayRows = rows;
   useEffect(() => {
     try {
       localStorage.setItem("webshark-columns", JSON.stringify(columnState));
@@ -771,6 +789,7 @@ export default function App() {
         ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
         : { key, direction: "asc" },
     );
+    setQuery((current) => (current.page === 0 ? current : { ...current, page: 0 }));
   }
   function startColumnResize(event, columnId) {
     event.preventDefault();
@@ -861,6 +880,16 @@ export default function App() {
     const label = customLabel.trim() || normalized;
     const dynamic = { id: normalized, label, field: normalized, kind: "text" };
     columnById.set(dynamic.id, dynamic);
+    try {
+      const stored = readStorage("webshark-dynamic-columns", []);
+      const next = Array.isArray(stored)
+        ? stored.filter((item) => item?.id !== dynamic.id)
+        : [];
+      localStorage.setItem(
+        "webshark-dynamic-columns",
+        JSON.stringify([...next, dynamic].slice(-50)),
+      );
+    } catch {}
     setColumnState((current) =>
       current.some((item) => item.id === dynamic.id)
         ? current.map((item) =>
@@ -957,7 +986,7 @@ export default function App() {
     api(
       capturePath(
         capture.id,
-        `/packets?filter=${encodeURIComponent(filter)}&page=${query.page}&size=${pageSize}`,
+        `/packets?filter=${encodeURIComponent(filter)}&page=${query.page}&size=${pageSize}&sort=${encodeURIComponent(columnById.get(sort.key)?.field || "frame.number")}&direction=${sort.direction}${requestedFields.map((field) => `&field=${encodeURIComponent(field)}`).join("")}`,
       ),
       { signal: controller.signal },
     )
@@ -992,6 +1021,8 @@ export default function App() {
     ready,
     query,
     pageSize,
+    sort,
+    requestedFields.join(","),
     markedOnly,
     markedOnly ? [...bookmarked].join(",") : "",
   ]);
@@ -1115,6 +1146,12 @@ export default function App() {
     setShowSaved(false);
     setContext(null);
     setRelation(null);
+  }
+  function locateRtpPacket(packetNo, streamFilter) {
+    if (!Number.isInteger(packetNo)) return;
+    const exact = `frame.number == ${packetNo}`;
+    apply(combineFilter(streamFilter || "rtp", exact, "and"));
+    setSelectedNo(packetNo);
   }
   function navigate(id) {
     if (id === "sipFlow") {
@@ -1542,6 +1579,15 @@ export default function App() {
                 ))}
             </div>
           )}
+          <button
+            className="nav-item nav-group-toggle sidebar-timeline-toggle"
+            aria-haspopup="dialog"
+            disabled={!ready}
+            onClick={() => setModal("trafficTimeline")}
+          >
+            <ChartNoAxesColumnIncreasing size={18} />
+            <span>流量时间线</span>
+          </button>
         </nav>
         <div className="sidebar-divider" />
         <div className="nav-section-label recent-label saved-view-heading">
@@ -1549,12 +1595,6 @@ export default function App() {
             <Bookmark size={12} />
             已保存视图
           </span>
-          <IconButton
-            icon={Plus}
-            label="保存当前视图"
-            disabled={!ready}
-            onClick={saveWorkspaceView}
-          />
         </div>
         <div className="saved-view-list">
           {savedViews.map((item) => (
@@ -1584,7 +1624,7 @@ export default function App() {
           ))}
           {!savedViews.length && (
             <div className="saved-view-empty">
-              应用过滤器后，点击这里的加号保存分析视图
+              应用过滤器后，可在过滤器工具栏中保存分析视图
             </div>
           )}
         </div>
@@ -1626,20 +1666,6 @@ export default function App() {
           <ChevronRight size={14} />
         </button>
         <div className="sidebar-bottom">
-          <button
-            className="sidebar-status"
-            onClick={() => setModal("settings")}
-            aria-label="查看解析服务状态"
-          >
-            <span className="sidebar-status-icon">
-              <span className="status-dot" />
-            </span>
-            <span className="sidebar-status-copy">
-              <strong>离线分析</strong>
-              <small>{health?.ready ? "TShark 解析引擎已连接" : "等待解析服务"}</small>
-            </span>
-            <Settings2 size={16} />
-          </button>
           <div className="sidebar-version">
             <span>WebShark</span>
             <span>Offline Analyzer v0.2</span>
@@ -1852,22 +1878,6 @@ export default function App() {
           )}
           {ready && view === "packets" && (
             <>
-              <section className="activity-strip">
-                <div className="activity-heading">
-                  <span>
-                    <Activity size={15} />
-                    流量时间线
-                  </span>
-                  <div>
-                    <span className="chart-legend">
-                      <i />
-                      完整抓包 · 捕获字节
-                    </span>
-                    <span className="timeline-interval">自适应时间分桶</span>
-                  </div>
-                </div>
-                <TrafficChart summary={summary} />
-              </section>
               <section className="filter-section" aria-label="显示过滤操作">
                 <div
                   className={`filter-input ${filterError ? "filter-invalid" : ""}`}
@@ -2310,6 +2320,7 @@ export default function App() {
             <RtpPanel
               capture={capture}
               onFilter={apply}
+              onLocatePacket={locateRtpPacket}
               onEdit={editMapping}
               onDetect={() => {
                 setDetectionPort(null);
@@ -3220,6 +3231,53 @@ export default function App() {
               <button className="button primary" onClick={() => setModal(null)}>
                 完成
               </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {modal === "trafficTimeline" && capture && (
+        <Modal
+          wide
+          title="流量时间线"
+          subtitle={`${capture.name} · 捕获字节 / 时间`}
+          onClose={() => setModal(null)}
+        >
+          <div className="modal-body traffic-timeline-modal">
+            <div className="traffic-timeline-summary" aria-label="流量时间线摘要">
+              <div>
+                <span>数据包</span>
+                <strong>{summary.count.toLocaleString()}</strong>
+              </div>
+              <div>
+                <span>总流量</span>
+                <strong>{sizeLabel(summary.bytes)}</strong>
+              </div>
+              <div>
+                <span>时间跨度</span>
+                <strong>{summary.duration.toFixed(3)} s</strong>
+              </div>
+              <div>
+                <span>峰值区间</span>
+                <strong>
+                  {sizeLabel(
+                    Math.max(0, ...(summary.activity || []).map((point) => point.bytes)),
+                  )}
+                </strong>
+              </div>
+            </div>
+            <section className="traffic-timeline-card" aria-label="完整流量时间线图表">
+              <div className="traffic-timeline-card-heading">
+                <div>
+                  <strong>完整时间线</strong>
+                  <span>按时间聚合数据包字节数，悬停柱状条查看具体区间</span>
+                </div>
+                <code>{summary.duration.toFixed(3)} s</code>
+              </div>
+              <TrafficChart summary={summary} large />
+            </section>
+            <div className="traffic-timeline-legend">
+              <span><i className="traffic-timeline-legend-swatch" />数据包字节</span>
+              <span>时间刻度随捕获时长自动分布</span>
             </div>
           </div>
         </Modal>

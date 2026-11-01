@@ -49,6 +49,37 @@ test("sip_mrcp media-port macro resolves the SIP dialog and RTP stream", async (
   assert.ok(data.relation.matches[0].rtpStreams.length > 0);
   assert.ok(data.packets.some((packet) => packet.protocol === "RTP"));
 });
+test("sip_mrcp macros survive boolean combinations and filtered export", async () => {
+  const filter = "(sip_mrcp.port=20000) && (rtp)";
+  const response = await fetch(
+    `${server.base}/api/captures/${capture.id}/packets?filter=${encodeURIComponent(filter)}&size=200`,
+  );
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.relation.type, "sip_mrcp");
+  assert.ok(data.packets.length > 0);
+  assert.ok(data.packets.every((packet) => packet.protocol === "RTP"));
+  const exported = await fetch(
+    `${server.base}/api/captures/${capture.id}/export?filter=${encodeURIComponent(filter)}`,
+  );
+  assert.equal(exported.status, 200);
+  assert.equal(exported.headers.get("content-type"), "application/vnd.tcpdump.pcap");
+  assert.ok((await exported.arrayBuffer()).byteLength > 24);
+});
+test("packet sorting is global before pagination and custom fields are indexed", async () => {
+  const first = await fetch(
+    `${server.base}/api/captures/${capture.id}/packets?sort=frame.len&direction=desc&page=0&size=10`,
+  ).then((r) => r.json());
+  const second = await fetch(
+    `${server.base}/api/captures/${capture.id}/packets?sort=frame.len&direction=desc&page=1&size=10`,
+  ).then((r) => r.json());
+  assert.ok(first.packets.length > 0 && second.packets.length > 0);
+  assert.ok(first.packets.at(-1).length >= second.packets[0].length);
+  const custom = await fetch(
+    `${server.base}/api/captures/${capture.id}/packets?field=sip.Call-ID&filter=sip&size=20`,
+  ).then((r) => r.json());
+  assert.ok(custom.packets.some((packet) => packet.fields?.["sip.Call-ID"]));
+});
 test("configuration reanalysis persists scoped mapping and makes WAV playable", async () => {
   const config = {
     ports: [20000],

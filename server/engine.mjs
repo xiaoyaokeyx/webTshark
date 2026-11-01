@@ -3,7 +3,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { open, writeFile, readFile, mkdir, rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { once } from "node:events";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import {
@@ -13,6 +13,7 @@ import {
   streamKey,
   streamFilter,
   makeWave,
+  decodeG711,
 } from "./rtp.mjs";
 
 export const tshark = process.env.TSHARK_PATH || "tshark";
@@ -186,6 +187,11 @@ const baseFields = [
   "rtp.ssrc",
   "rtp.seq",
   "rtp.timestamp",
+  "mrcpv2.Channel-Identifier",
+  "mrcpv2.Method",
+  "mrcpv2.Event",
+  "mrcpv2.reqID",
+  "mrcpv2.Completion-Cause",
   "webshark.rtp.codec",
   "webshark.rtp.clock_rate",
   "webshark.rtp.channels",
@@ -271,6 +277,9 @@ export function parseSipMrcpFilter(expression = "") {
   return { port };
 }
 
+const sipMrcpMacroPattern =
+  /sip_mrcp\.(?:port|media_port|rtp_port)\s*(?:=|==|eq)\s*\d+/gi;
+
 function splitFieldValues(value) {
   return String(value || "")
     .split("|")
@@ -341,6 +350,29 @@ function mediaAttributes(media) {
 
 function unique(values) {
   return [...new Set(values.filter((value) => value !== "" && value != null))];
+}
+
+function uniqueDecodeAs(rules = []) {
+  return [
+    ...new Map(
+      rules
+        .filter(
+          (rule) =>
+            rule &&
+            ["tcp", "udp"].includes(String(rule.transport).toLowerCase()) &&
+            Number.isInteger(Number(rule.port)) &&
+            rule.protocol,
+        )
+        .map((rule) => [
+          `${String(rule.transport).toLowerCase()}:${Number(rule.port)}:${rule.protocol}`,
+          {
+            transport: String(rule.transport).toLowerCase(),
+            port: Number(rule.port),
+            protocol: String(rule.protocol),
+          },
+        ]),
+    ).values(),
+  ];
 }
 
 function displayString(value) {
@@ -459,6 +491,30 @@ function mediaPortSet(media, predicate) {
   );
 }
 
+function mediaEndpointPairs(media) {
+  return media
+    .map((item) => {
+      const addresses = [item.source, item.destination, item.connection].filter(Boolean);
+      return addresses.length > 1 ? addresses : null;
+    })
+    .filter(Boolean);
+}
+
+function rowMatchesMediaEndpoints(row, pairs) {
+  if (!pairs.length || !row.source || !row.destination) return true;
+  const addresses = new Set(pairs.flat());
+  return addresses.has(row.source) && addresses.has(row.destination);
+}
+
+function rowMrcpChannel(row) {
+  return String(
+    row["mrcpv2.Channel-Identifier"] ||
+      row["mrcpv2.channel_identifier"] ||
+      row["mrcpv2.channel-id"] ||
+      "",
+  );
+}
+
 function buildPortExpression(protocol, ports) {
   return [...ports]
     .sort((a, b) => a - b)
@@ -532,6 +588,8 @@ function relationMatchFromRows({
   );
   const mrcpChannels = mediaChannelIds(mrcpMedia);
   const resources = mediaResource(mrcpMedia);
+  const mrcpPairs = mediaEndpointPairs(mrcpMedia);
+  const rtpPairs = mediaEndpointPairs(audioMedia);
   const audioPorts = mediaPortSet(audioMedia, () => true);
   const rtcpPorts = new Set();
   for (const item of audioMedia) {
@@ -548,14 +606,23 @@ function relationMatchFromRows({
   const end = times.length ? Math.max(...times) : start;
   const from = Math.max(0, start - 1);
   const to = end + 2;
-  const mrcpRows = allRows.filter(
+  const mrcpCandidates = allRows.filter(
     (row) =>
       row.transport === "TCP" &&
       Number.isFinite(row.time) &&
       row.time >= from &&
       row.time <= to &&
+      rowMatchesMediaEndpoints(row, mrcpPairs) &&
       [...mrcpPorts].some((port) => row.srcPort === port || row.dstPort === port),
   );
+  const channelStreams = unique(
+    mrcpCandidates
+      .filter((row) => mrcpChannels.some((channel) => rowMrcpChannel(row).includes(channel)))
+      .map((row) => row.stream),
+  ).filter((stream) => Number.isInteger(stream));
+  const mrcpRows = channelStreams.length
+    ? mrcpCandidates.filter((row) => channelStreams.includes(row.stream))
+    : mrcpCandidates;
   const rtpPorts = new Set([...audioPorts, ...rtcpPorts]);
   const rtpRows = allRows.filter(
     (row) =>
@@ -563,6 +630,7 @@ function relationMatchFromRows({
       Number.isFinite(row.time) &&
       row.time >= from &&
       row.time <= to &&
+      rowMatchesMediaEndpoints(row, rtpPairs) &&
       [...rtpPorts].some((port) => row.srcPort === port || row.dstPort === port),
   );
   const mrcpStreams = unique(mrcpRows.map((row) => row.stream)).sort((a, b) => a - b);
@@ -724,6 +792,8 @@ async function resolveSipMrcpPort(capture, port) {
     );
     const mrcpChannels = mediaChannelIds(mrcpMedia);
     const resources = mediaResource(mrcpMedia);
+    const mrcpPairs = mediaEndpointPairs(mrcpMedia);
+    const rtpPairs = mediaEndpointPairs(audioMedia);
     const audioPorts = mediaPortSet(audioMedia, () => true);
     const rtcpPorts = new Set();
     for (const item of audioMedia) {
@@ -752,6 +822,14 @@ async function resolveSipMrcpPort(capture, port) {
           protocol: "mrcpv2",
         })),
       );
+      mrcpRows = mrcpRows.filter((row) => rowMatchesMediaEndpoints(row, mrcpPairs));
+      const channelStreams = unique(
+        mrcpRows
+          .filter((row) => mrcpChannels.some((channel) => rowMrcpChannel(row).includes(channel)))
+          .map((row) => row.stream),
+      ).filter((stream) => Number.isInteger(stream));
+      if (channelStreams.length)
+        mrcpRows = mrcpRows.filter((row) => channelStreams.includes(row.stream));
       for (const row of mrcpRows) if (Number.isInteger(row.stream)) mrcpStreams.add(row.stream);
     }
     const rtpPorts = new Set([...audioPorts, ...rtcpPorts]);
@@ -769,6 +847,7 @@ async function resolveSipMrcpPort(capture, port) {
           protocol: "rtp",
         })),
       );
+      rtpRows = rtpRows.filter((row) => rowMatchesMediaEndpoints(row, rtpPairs));
       for (const row of rtpRows) if (Number.isInteger(row.stream)) rtpStreams.add(row.stream);
     }
     const sipFrames = unique(sipRows.map((row) => row.no)).sort((a, b) => a - b);
@@ -830,22 +909,57 @@ async function resolveSipMrcpPort(capture, port) {
   };
 }
 
-export async function resolveFilter(capture, filter = "") {
-  const macro = parseSipMrcpFilter(filter);
-  if (!macro) return { index: await getIndex(capture, filter), relation: null };
+export async function resolveFilter(capture, filter = "", requestedFields = []) {
+  return resolveFilterWithFields(capture, filter, requestedFields);
+}
+
+async function resolveFilterWithFields(capture, filter = "", requestedFields = []) {
+  const macros = [...String(filter).matchAll(sipMrcpMacroPattern)].map((match) => {
+    const expression = match[0];
+    return { expression, macro: parseSipMrcpFilter(expression) };
+  });
+  if (!macros.length)
+    return {
+      index: await getIndex(capture, filter, [], requestedFields),
+      relation: null,
+    };
   capture.relationQueries ||= new Map();
-  let relation = capture.relationQueries.get(`port:${macro.port}`);
-  if (!relation) {
-    relation = resolveSipMrcpPort(capture, macro.port).catch((error) => {
-      capture.relationQueries.delete(`port:${macro.port}`);
-      throw error;
-    });
-    capture.relationQueries.set(`port:${macro.port}`, relation);
+  const relations = [];
+  for (const { macro } of macros) {
+    const key = `port:${macro.port}`;
+    let relation = capture.relationQueries.get(key);
+    if (!relation) {
+      relation = resolveSipMrcpPort(capture, macro.port).catch((error) => {
+        capture.relationQueries.delete(key);
+        throw error;
+      });
+      capture.relationQueries.set(key, relation);
+    }
+    relations.push(await relation);
   }
-  const resolved = await relation;
+  const byExpression = new Map(
+    macros.map(({ expression }, index) => [expression.toLowerCase(), relations[index]]),
+  );
+  const expandedFilter = String(filter).replace(
+    sipMrcpMacroPattern,
+    (expression) => `(${byExpression.get(expression.toLowerCase()).expandedFilter})`,
+  );
+  const mergedRelation =
+    relations.length === 1
+      ? { ...relations[0], expandedFilter }
+      : {
+          type: "sip_mrcp",
+          ports: unique(relations.map((item) => item.port)),
+          matches: relations.flatMap((item) => item.matches || []),
+          decodeAs: uniqueDecodeAs(relations.flatMap((item) => item.decodeAs || [])),
+          expandedFilter,
+          ambiguous: relations.some((item) => item.ambiguous),
+          warning: relations.map((item) => item.warning).filter(Boolean).join("；") || null,
+        };
+  const decodeAs = uniqueDecodeAs(relations.flatMap((item) => item.decodeAs || []));
   return {
-    index: await getIndex(capture, resolved.expandedFilter, resolved.decodeAs),
-    relation: resolved,
+    index: await getIndex(capture, expandedFilter, decodeAs, requestedFields),
+    relation: mergedRelation,
   };
 }
 function argsForSource(capture, source) {
@@ -1113,6 +1227,7 @@ export async function buildIndex(
   filter = "",
   progress = false,
   extraDecodeAs = [],
+  requestedFields = [],
 ) {
   if (filter.length > 4096) throw new Error("显示过滤器最长 4096 个字符");
   const hash = createHash("sha256")
@@ -1128,7 +1243,7 @@ export async function buildIndex(
   out.on("error", (e) => {
     writeError = e;
   });
-  const fields = baseFields.filter(
+  const fields = [...new Set([...baseFields, ...requestedFields])].filter(
     (f) => f.startsWith("_ws.col.") || fieldTypes.has(f),
   );
   try {
@@ -1177,19 +1292,31 @@ export async function buildIndex(
     throw e;
   }
 }
-export async function getIndex(capture, filter = "", extraDecodeAs = []) {
+export async function getIndex(
+  capture,
+  filter = "",
+  extraDecodeAs = [],
+  requestedFields = [],
+) {
   const macro = parseSipMrcpFilter(filter);
   if (macro) {
-    const resolved = await resolveFilter(capture, filter);
+    const resolved = await resolveFilter(capture, filter, requestedFields);
     return resolved.index;
   }
-  if (!filter) return capture.index;
+  if (
+    !filter &&
+    requestedFields.every((field) => capture.index?.fields?.includes(field))
+  )
+    return capture.index;
+  const fieldKey = requestedFields.length
+    ? `\nfields:${[...new Set(requestedFields)].sort().join(",")}`
+    : "";
   const queryKey = extraDecodeAs.length
     ? `${filter}\n${extraDecodeAs
         .map(({ transport, port, protocol }) => `${transport}:${port}:${protocol}`)
         .sort()
-        .join(",")}`
-    : filter;
+        .join(",")}${fieldKey}`
+    : `${filter}${fieldKey}`;
   if (capture.queries.has(queryKey)) return capture.queries.get(queryKey);
   // Each query is a bounded disk index, rather than all packet objects held in browser or Node memory.
   if (capture.queries.size >= 4) {
@@ -1198,7 +1325,13 @@ export async function getIndex(capture, filter = "", extraDecodeAs = []) {
     Promise.resolve(value)
       .then((i) => {
         const timer = setTimeout(
-          () => rm(i.path, { force: true }).catch(() => {}),
+          () => {
+            rm(i.path, { force: true }).catch(() => {});
+            for (const sorted of i.sorted?.values?.() || [])
+              Promise.resolve(sorted)
+                .then((item) => rm(item.path, { force: true }))
+                .catch(() => {});
+          },
           60000,
         );
         timer.unref();
@@ -1206,14 +1339,166 @@ export async function getIndex(capture, filter = "", extraDecodeAs = []) {
       .catch(() => {});
   }
   const snapshot = { ...capture };
-  const promise = buildIndex(snapshot, filter, false, extraDecodeAs).catch((e) => {
+  const promise = buildIndex(snapshot, filter, false, extraDecodeAs, requestedFields).catch((e) => {
     if (capture.queries.get(queryKey) === promise) capture.queries.delete(queryKey);
     throw e;
   });
   capture.queries.set(queryKey, promise);
   return promise;
 }
-export async function pageFromIndex(index, page = 0, pageSize = 100) {
+function sortFieldValue(record, field) {
+  if (field === "frame.number") return record.no;
+  if (field === "frame.time_relative") return record.time;
+  if (field === "frame.time_epoch") return record.epoch;
+  if (field === "ip.src") return record.source;
+  if (field === "ip.dst") return record.destination;
+  if (field === "_ws.col.Protocol") return record.protocol;
+  if (field === "frame.len") return record.length;
+  if (field === "_ws.col.Info") return record.info;
+  if (field === "tcp.srcport") return record.transport === "TCP" ? record.srcPort : null;
+  if (field === "tcp.dstport") return record.transport === "TCP" ? record.dstPort : null;
+  if (field === "udp.srcport") return record.transport === "UDP" ? record.srcPort : null;
+  if (field === "udp.dstport") return record.transport === "UDP" ? record.dstPort : null;
+  if (field === "tcp.stream") return record.transport === "TCP" ? record.stream : null;
+  if (field === "udp.stream") return record.transport === "UDP" ? record.stream : null;
+  if (field === "rtp.p_type") return record.rtp?.pt ?? null;
+  if (field === "rtp.ssrc") return record.rtp?.ssrc ?? null;
+  if (field === "rtp.seq") return record.rtp?.seq ?? null;
+  if (field === "rtp.timestamp") return record.rtp?.timestamp ?? null;
+  return record.fields?.[field] ?? null;
+}
+
+function compareSortEntries(left, right, direction) {
+  const a = left.value,
+    b = right.value,
+    aEmpty = a == null || a === "",
+    bEmpty = b == null || b === "";
+  if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+  if (aEmpty) return left.record.no - right.record.no;
+  const aNumber = Number(a),
+    bNumber = Number(b);
+  let result;
+  if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) result = aNumber - bNumber;
+  else
+    result = String(a).localeCompare(String(b), "zh-CN", {
+      numeric: true,
+      sensitivity: "base",
+    });
+  return result === 0
+    ? left.record.no - right.record.no
+    : (direction === "desc" ? -1 : 1) * result;
+}
+
+async function buildSortedIndex(index, field, direction) {
+  const chunkSize = 20000;
+  const chunks = [];
+  let chunk = [];
+  const input = createReadStream(index.path, { encoding: "utf8" });
+  const reader = createInterface({ input, crlfDelay: Infinity });
+  const flushChunk = async () => {
+    if (!chunk.length) return;
+    chunk.sort((a, b) => compareSortEntries(a, b, direction));
+    const path = join(dirname(index.path), `.sort-${randomUUID()}.jsonl`);
+    await writeFile(path, chunk.map((item) => JSON.stringify(item.record)).join("\n") + "\n");
+    chunks.push(path);
+    chunk = [];
+  };
+  try {
+    for await (const line of reader) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line);
+        chunk.push({ record, value: sortFieldValue(record, field) });
+        if (chunk.length >= chunkSize) await flushChunk();
+      } catch {
+        // Ignore a partially written/corrupt index record; the normal reader does the same.
+      }
+    }
+    await flushChunk();
+  } finally {
+    input.destroy();
+  }
+  const outputPath = join(dirname(index.path), `.sorted-${randomUUID()}.jsonl`);
+  const output = createWriteStream(outputPath, { flags: "w" });
+  const iterators = [];
+  const current = [];
+  try {
+    for (const path of chunks) {
+      const stream = createReadStream(path, { encoding: "utf8" });
+      const lineReader = createInterface({ input: stream, crlfDelay: Infinity });
+      const iterator = lineReader[Symbol.asyncIterator]();
+      iterators.push({ stream, lineReader, iterator });
+      const next = await iterator.next();
+      current.push(next.done ? null : JSON.parse(next.value));
+    }
+    const offsets = [0];
+    let bytes = 0,
+      count = 0;
+    while (current.some(Boolean)) {
+      let winner = -1;
+      for (let i = 0; i < current.length; i++) {
+        if (!current[i]) continue;
+        const candidate = { record: current[i], value: sortFieldValue(current[i], field) };
+        if (
+          winner < 0 ||
+          compareSortEntries(
+            candidate,
+            { record: current[winner], value: sortFieldValue(current[winner], field) },
+            direction,
+          ) < 0
+        )
+          winner = i;
+      }
+      const record = JSON.stringify(current[winner]) + "\n";
+      if (!output.write(record)) await once(output, "drain");
+      bytes += Buffer.byteLength(record);
+      count++;
+      if (count % 100 === 0) offsets.push(bytes);
+      const next = await iterators[winner].iterator.next();
+      current[winner] = next.done ? null : JSON.parse(next.value);
+    }
+    output.end();
+    await once(output, "finish");
+    return {
+      ...index,
+      path: outputPath,
+      offsets,
+      bytes,
+      count,
+      sortKey: field,
+      sortDirection: direction,
+      sortedPaths: [outputPath],
+    };
+  } catch (error) {
+    output.destroy();
+    await rm(outputPath, { force: true });
+    throw error;
+  } finally {
+    for (const item of iterators) {
+      item.lineReader.close();
+      item.stream.destroy();
+    }
+    await Promise.all(chunks.map((path) => rm(path, { force: true })));
+  }
+}
+
+async function sortedIndexFor(index, field, direction) {
+  index.sorted ||= new Map();
+  const key = `${field}:${direction}`;
+  if (!index.sorted.has(key))
+    index.sorted.set(key, buildSortedIndex(index, field, direction));
+  return index.sorted.get(key);
+}
+
+export async function pageFromIndex(index, page = 0, pageSize = 100, sort = null) {
+  if (sort?.field) {
+    const sorted = await sortedIndexFor(
+      index,
+      sort.field,
+      sort.direction === "desc" ? "desc" : "asc",
+    );
+    return pageFromIndex(sorted, page, pageSize);
+  }
   page = Math.max(0, Math.floor(page));
   pageSize = Math.max(1, Math.floor(Number(pageSize) || 100));
   const start = page * pageSize;
@@ -1677,10 +1962,130 @@ export async function audioFor(capture, streamIndex) {
   );
   return makeWave(frames, mapping);
 }
-export async function exportCapture(capture, filter, path) {
+
+export async function waveformFor(capture, streamIndex, maxPoints = 2400) {
+  const stream = capture.index.summary.media[streamIndex];
+  if (!stream) throw new Error("RTP 媒体流不存在");
+  if (stream.pts.length !== 1)
+    throw new Error("该流含多个 PT，请先按 PT 导出抓包后绘制波形");
+  const mapping =
+    mappingFor(
+      { ...stream, rtp: { pt: stream.pts[0], ssrc: stream.ssrc } },
+      capture.config,
+    ) || staticCodec(stream.pts[0]);
+  if (!mapping || !["PCMA", "PCMU"].includes(mapping.codec))
+    throw new Error("当前波形图仅支持 PCMA / PCMU 音频流");
+  const frames = [];
+  let previousSequence = null;
   await run(
     [
       ...argsFor(capture),
+      "-Y",
+      stream.filter,
+      "-T",
+      "fields",
+      "-E",
+      "occurrence=f",
+      "-e",
+      "frame.number",
+      "-e",
+      "frame.time_relative",
+      "-e",
+      "frame.time_epoch",
+      "-e",
+      "rtp.seq",
+      "-e",
+      "rtp.timestamp",
+      "-e",
+      "rtp.payload",
+    ],
+    {
+      capture,
+      onLine: (line) => {
+        const [no, time, epoch, seq, timestamp, hex] = line.split("\t");
+        if (!hex) return;
+        const payload = Buffer.from(hex.replaceAll(":", ""), "hex");
+        const samples = [...payload].map((byte) => decodeG711(byte, mapping.codec));
+        if (!samples.length) return;
+        const min = Math.min(...samples);
+        const max = Math.max(...samples);
+        const rms = Math.sqrt(
+          samples.reduce((sum, sample) => sum + sample * sample, 0) /
+            samples.length,
+        );
+        const sequence = Number(seq);
+        frames.push({
+          no: Number(no),
+          time: Number(time),
+          epoch: Number(epoch),
+          seq: sequence,
+          timestamp: Number(timestamp),
+          span: payload.length / mapping.clockRate,
+          min,
+          max,
+          level: rms,
+          lostBefore:
+            previousSequence == null
+              ? 0
+              : Math.max(0, sequence - previousSequence - 1),
+        });
+        previousSequence = sequence;
+      },
+    },
+  );
+  const firstTimestamp = frames.find((frame) => Number.isFinite(frame.timestamp))?.timestamp;
+  const firstTime = frames.find((frame) => Number.isFinite(frame.time))?.time ?? 0;
+  const firstEpoch = frames.find((frame) => Number.isFinite(frame.epoch))?.epoch ?? null;
+  for (const frame of frames) {
+    frame.offset =
+      Number.isFinite(firstTimestamp) && Number.isFinite(frame.timestamp)
+        ? (frame.timestamp - firstTimestamp) / mapping.clockRate
+        : Math.max(0, (frame.time || 0) - firstTime);
+  }
+  const duration = Math.max(
+    0,
+    ...frames.map((frame) => (frame.offset || 0) + (frame.span || 0)),
+  );
+  if (frames.length <= maxPoints) {
+    return {
+      stream: streamIndex,
+      codec: mapping.codec,
+      clockRate: mapping.clockRate,
+      packets: frames,
+      duration,
+      startTime: firstTime,
+      startEpoch: firstEpoch,
+      sampled: false,
+    };
+  }
+  const step = frames.length / maxPoints;
+  const packets = [];
+  for (let index = 0; index < maxPoints; index += 1) {
+    const start = Math.floor(index * step);
+    const end = Math.min(frames.length, Math.floor((index + 1) * step));
+    const bucket = frames.slice(start, Math.max(start + 1, end));
+    packets.push(
+      bucket.reduce((best, frame) =>
+        frame.level > best.level ? frame : best,
+      ),
+    );
+  }
+  return {
+    stream: streamIndex,
+    codec: mapping.codec,
+    clockRate: mapping.clockRate,
+    packets,
+    duration,
+    startTime: firstTime,
+    startEpoch: firstEpoch,
+    sampled: true,
+    originalPackets: frames.length,
+  };
+}
+export async function exportCapture(capture, filter, path, extraDecodeAs = []) {
+  await run(
+    [
+      ...argsFor(capture, extraDecodeAs),
       ...(filter ? ["-Y", filter] : []),
       "-F",
       "pcapng",

@@ -23,6 +23,7 @@ import {
   packetDetail,
   followStream,
   audioFor,
+  waveformFor,
   exportCapture,
   suggestFields,
   resolveFilter,
@@ -347,7 +348,12 @@ const server = http.createServer(async (req, res) => {
         }
         if (action === "packets" && !parts[4] && method === "GET") {
           const requestedFilter = url.searchParams.get("filter") || "";
-          const resolved = await resolveFilter(c, requestedFilter);
+          const requestedFields = url.searchParams
+            .getAll("field")
+            .flatMap((value) => value.split(","))
+            .map((value) => value.trim())
+            .filter(Boolean);
+          const resolved = await resolveFilter(c, requestedFilter, requestedFields);
           const index = resolved.index;
           const page = Math.max(0, Number(url.searchParams.get("page")) || 0);
           const rawSize = url.searchParams.get("size");
@@ -355,8 +361,14 @@ const server = http.createServer(async (req, res) => {
           const pageSize = Number.isFinite(requestedSize)
             ? Math.min(1000, Math.max(1, Math.floor(requestedSize)))
             : 100;
+          const sortField = url.searchParams.get("sort") || "";
+          const sortDirection = url.searchParams.get("direction") === "desc" ? "desc" : "asc";
+          const sort =
+            sortField && !(sortField === "frame.number" && sortDirection === "asc")
+              ? { field: sortField, direction: sortDirection }
+              : null;
           return json(res, {
-            packets: await pageFromIndex(index, page, pageSize),
+            packets: await pageFromIndex(index, page, pageSize, sort),
             total: index.count,
             bytes: index.summary.bytes,
             page,
@@ -388,12 +400,26 @@ const server = http.createServer(async (req, res) => {
           });
           return res.end(wave);
         }
+        if (action === "waveform" && method === "GET")
+          return json(
+            res,
+            await waveformFor(
+              c,
+              Number(url.searchParams.get("stream")),
+            ),
+          );
         if (action === "export") {
           const filter = url.searchParams.get("filter") || "";
           if (filter.length > 4096) throw new Error("过滤表达式过长");
+          const resolved = await resolveFilter(c, filter);
           const path = join(c.dir, `${randomUUID()}.pcapng`);
           try {
-            await exportCapture(c, filter, path);
+            await exportCapture(
+              c,
+              resolved.relation ? resolved.relation.expandedFilter : filter,
+              path,
+              resolved.relation?.decodeAs || [],
+            );
             res.writeHead(200, {
               "Content-Type": "application/vnd.tcpdump.pcap",
               "Content-Disposition":
