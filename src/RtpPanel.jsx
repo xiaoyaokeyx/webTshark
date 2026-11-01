@@ -274,6 +274,131 @@ export function RtpDetection({ config, initialPort, onSave, onClose }) {
     </Modal>
   );
 }
+const decodeAsProtocols = [
+  ["rtp", "RTP（实时传输协议）"],
+  ["rtcp", "RTCP（RTP 控制协议）"],
+  ["sip", "SIP（会话初始化协议）"],
+  ["sdp", "SDP（会话描述协议）"],
+  ["http", "HTTP"],
+  ["mrcpv2", "MRCPv2"],
+  ["dns", "DNS"],
+  ["tls", "TLS"],
+  ["data", "Data（原始数据）"],
+];
+export function DecodeAsEditor({ packet, existing, onSave, onClose }) {
+  const [transport, setTransport] = useState(
+      existing?.transport || packet?.transport?.toLowerCase() || "udp",
+    ),
+    [port, setPort] = useState(
+      existing?.port ?? packet?.dstPort ?? packet?.srcPort ?? "",
+    ),
+    [protocol, setProtocol] = useState(existing?.protocol || "rtp"),
+    [error, setError] = useState("");
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await onSave({ transport, port: Number(port), protocol });
+      onClose();
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  return (
+    <Modal
+      title="Decode As · 解码为"
+      subtitle="按 Wireshark 的端口规则，将当前 TCP/UDP 流交给指定协议解析器。"
+      onClose={onClose}
+    >
+      <form className="modal-body" onSubmit={submit}>
+        <div className="flow-identity">
+          <code>
+            数据包 #{packet?.no} · {packet?.source}:{packet?.srcPort} → {packet?.destination}:
+            {packet?.dstPort}
+          </code>
+          <span>{packet?.protocol || packet?.transport}</span>
+        </div>
+        <div className="form-grid">
+          <div>
+            <label className="field-label" htmlFor="decode-as-transport">
+              传输协议
+            </label>
+            <select
+              id="decode-as-transport"
+              value={transport}
+              onChange={(event) => setTransport(event.target.value)}
+            >
+              <option value="udp">UDP</option>
+              <option value="tcp">TCP</option>
+            </select>
+          </div>
+          <div>
+            <label className="field-label" htmlFor="decode-as-port">
+              端口
+            </label>
+            <input
+              id="decode-as-port"
+              type="number"
+              min="1"
+              max="65535"
+              required
+              value={port}
+              onChange={(event) => setPort(event.target.value)}
+            />
+          </div>
+        </div>
+        <label className="field-label" htmlFor="decode-as-protocol">
+          解码协议
+        </label>
+        <select
+          id="decode-as-protocol"
+          className="form-select"
+          value={protocol}
+          onChange={(event) => setProtocol(event.target.value)}
+        >
+          {decodeAsProtocols.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <p className="form-helper">
+          规则对当前抓包生效，并同时匹配该端口的两个方向；编辑已有规则时可点击下方“恢复默认”。
+        </p>
+        {existing && (
+          <button
+            type="button"
+            className="text-button accent-text decode-as-reset"
+            onClick={async () => {
+              try {
+                await onSave(null);
+                onClose();
+              } catch (e) {
+                setError(e.message);
+              }
+            }}
+          >
+            恢复该端口的默认解析
+          </button>
+        )}
+        <Notice>原始 PCAP 不会被修改，重新解析只更新当前工作区的协议识别结果。</Notice>
+        {error && (
+          <p className="filter-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button type="button" className="button secondary" onClick={onClose}>
+            取消
+          </button>
+          <button className="button primary" type="submit">
+            应用并重新解析
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 export default function RtpPanel({
   capture,
   onFilter,

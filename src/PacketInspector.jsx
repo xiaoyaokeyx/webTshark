@@ -6,6 +6,7 @@ import {
   Star,
   GitBranch,
   ArrowUpRight,
+  Columns3,
   Filter,
   Settings2,
 } from "lucide-react";
@@ -38,6 +39,8 @@ export function ContextMenu({
   onFilter,
   onStream,
   onRtp,
+  onDecodeAs,
+  onColumn,
   onCopy,
   onMark,
 }) {
@@ -115,6 +118,17 @@ export function ContextMenu({
       >
         仅填入过滤栏，暂不应用
       </button>
+      <button
+        role="menuitem"
+        disabled={!context.columnField}
+        onClick={() => {
+          onColumn(context.columnField, context.columnLabel || context.label);
+          onClose();
+        }}
+      >
+        <Columns3 size={14} />
+        应用为列
+      </button>
       <div className="context-divider" />
       {context.packet?.transport && (
         <button
@@ -140,6 +154,18 @@ export function ContextMenu({
           {context.packet.rtp
             ? "设置此 RTP 流的 PT 编解码"
             : "将此 UDP 端口解码为 RTP"}
+        </button>
+      )}
+      {context.packet?.transport && (
+        <button
+          role="menuitem"
+          onClick={() => {
+            onDecodeAs(context.packet);
+            onClose();
+          }}
+        >
+          <Settings2 size={14} />
+          解码为…
         </button>
       )}
       <button
@@ -290,6 +316,8 @@ export default function PacketInspector({
                     y: e.clientY,
                     condition: field.filter,
                     label: field.name,
+                    columnField: field.name,
+                    columnLabel: field.name,
                     packet,
                   })
                 }

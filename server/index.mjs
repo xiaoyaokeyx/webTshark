@@ -25,12 +25,25 @@ import {
   audioFor,
   exportCapture,
   suggestFields,
+  resolveFilter,
   stopAll,
 } from "./engine.mjs";
 import { validateConfig, codecs } from "./rtp.mjs";
 import { buildDemoPcap } from "./fixtures.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+function flagValue(name) {
+  const args = process.argv.slice(2);
+  const index = args.indexOf(name);
+  if (index !== -1) return args[index + 1] || "";
+  const inline = args.find((arg) => arg.startsWith(`${name}=`));
+  return inline ? inline.slice(name.length + 1) : "";
+}
+const listenHost =
+  flagValue("--host") || flagValue("--bind") || process.env.HOST || "0.0.0.0";
+const listenPort =
+  Number(flagValue("--port") || process.env.PORT) || 3001;
 const dataRoot = resolve(process.env.DATA_DIR || join(root, ".webshark"));
+const DEMO_VERSION = 3;
 await mkdir(dataRoot, { recursive: true, mode: 0o700 });
 const captures = new Map();
 const maxUpload = Number(process.env.MAX_UPLOAD_BYTES) || 1024 ** 3;
@@ -49,6 +62,7 @@ function snapshot(c) {
     summary: c.status === "ready" ? c.index?.summary : null,
     created: c.created,
     demo: c.demo,
+    demoVersion: c.demoVersion || null,
   };
 }
 async function save(c) {
@@ -67,6 +81,7 @@ for (const name of await readdir(dataRoot)) {
       ...stored,
       dir: join(dataRoot, name),
       queries: new Map(),
+      relationQueries: new Map(),
       processes: new Set(),
       cancelled: false,
     };
@@ -97,6 +112,7 @@ async function analyze(c, config = c.config) {
   c.config = config;
   c.revision++;
   c.queries.clear();
+  c.relationQueries?.clear();
   try {
     await prepare(c);
     const index = await buildIndex(c, "", true);
@@ -141,8 +157,10 @@ async function newCapture(name, demo = false) {
     status: "uploading",
     processed: 0,
     revision: 0,
-    config: { ports: [], heuristic: false, mappings: [] },
+    demoVersion: demo ? DEMO_VERSION : null,
+    config: { ports: [], heuristic: false, mappings: [], decodeAs: [] },
     queries: new Map(),
+    relationQueries: new Map(),
     processes: new Set(),
   };
   captures.set(id, c);
@@ -171,13 +189,20 @@ async function readJson(req) {
 }
 function requestGuard(req) {
   const host = req.headers.host || "";
-  const allowed = process.env.ALLOWED_HOSTS?.split(",") || [
-    "127.0.0.1",
-    "localhost",
-    "[::1]",
-  ];
+  const allowed = (process.env.ALLOWED_HOSTS
+    ? process.env.ALLOWED_HOSTS.split(",")
+    : [
+        "127.0.0.1",
+        "localhost",
+        "[::1]",
+        listenHost,
+        ...(listenHost === "0.0.0.0" || listenHost === "::" ? ["*"] : []),
+      ]
+  )
+    .map((value) => value.trim())
+    .filter(Boolean);
   const hostname = host.replace(/:\d+$/, "");
-  if (!allowed.includes(hostname))
+  if (!allowed.includes("*") && !allowed.includes(hostname))
     throw Object.assign(
       new Error("不允许的 Host；外部部署需配置 ALLOWED_HOSTS"),
       { status: 403 },
@@ -185,8 +210,13 @@ function requestGuard(req) {
   if (req.headers.origin) {
     const origin = new URL(req.headers.origin);
     const same = origin.host === host;
+    const originHostname = origin.hostname.includes(":")
+      ? `[${origin.hostname}]`
+      : origin.hostname;
+    const originAllowed =
+      allowed.includes("*") || allowed.includes(originHostname);
     const development =
-      ["127.0.0.1", "localhost"].includes(origin.hostname) &&
+      originAllowed &&
       ["5173", "5174"].includes(origin.port);
     if (!same && !development)
       throw Object.assign(new Error("不允许的跨站请求"), { status: 403 });
@@ -225,7 +255,26 @@ const server = http.createServer(async (req, res) => {
         const existing = [...captures.values()].find(
           (c) => c.demo && c.status === "ready",
         );
-        if (existing) return json(res, snapshot(existing));
+        if (existing && existing.demoVersion === DEMO_VERSION)
+          return json(res, snapshot(existing));
+        if (existing) {
+          const data = buildDemoPcap();
+          existing.demoVersion = DEMO_VERSION;
+          existing.status = "indexing";
+          existing.error = null;
+          existing.processed = 0;
+          existing.config = {
+            ports: [20000],
+            heuristic: false,
+            mappings: [],
+            decodeAs: [],
+          };
+          existing.revision = (existing.revision || 0) + 1;
+          existing.size = data.length;
+          await writeFile(join(existing.dir, "capture.pcap"), data);
+          void analyze(existing);
+          return json(res, snapshot(existing), 202);
+        }
         const c = await newCapture("webshark-demo.pcap", true);
         const data = buildDemoPcap();
         c.size = data.length;
@@ -297,14 +346,22 @@ const server = http.createServer(async (req, res) => {
           return json(res, snapshot(c), 202);
         }
         if (action === "packets" && !parts[4] && method === "GET") {
-          const index = await getIndex(c, url.searchParams.get("filter") || "");
+          const requestedFilter = url.searchParams.get("filter") || "";
+          const resolved = await resolveFilter(c, requestedFilter);
+          const index = resolved.index;
           const page = Math.max(0, Number(url.searchParams.get("page")) || 0);
+          const rawSize = url.searchParams.get("size");
+          const requestedSize = rawSize?.trim() ? Number(rawSize) : NaN;
+          const pageSize = Number.isFinite(requestedSize)
+            ? Math.min(1000, Math.max(1, Math.floor(requestedSize)))
+            : 100;
           return json(res, {
-            packets: await pageFromIndex(index, page),
+            packets: await pageFromIndex(index, page, pageSize),
             total: index.count,
             bytes: index.summary.bytes,
             page,
-            pageSize: 100,
+            pageSize,
+            relation: resolved.relation,
           });
         }
         if (action === "packets" && parts[4])
@@ -382,14 +439,17 @@ const server = http.createServer(async (req, res) => {
 });
 server.requestTimeout = 15 * 60 * 1000;
 server.headersTimeout = 30000;
-server.listen(
-  Number(process.env.PORT) || 3001,
-  process.env.HOST || "127.0.0.1",
-  () =>
-    console.log(
-      `WebShark API: http://${process.env.HOST || "127.0.0.1"}:${process.env.PORT || 3001} · ${engineError || engineVersion}`,
-    ),
-);
+server.listen(listenPort, listenHost, () => {
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : listenPort;
+  console.log(
+    `WebShark API: http://${listenHost}:${port} · ${engineError || engineVersion}`,
+  );
+  if (listenHost === "0.0.0.0" || listenHost === "::")
+    console.warn(
+      "WebShark API is reachable on all network interfaces; set ALLOWED_HOSTS or use --host to restrict access.",
+    );
+});
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     stopAll();

@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1",
-    "dev:ui": "vite --host 127.0.0.1",
+    "preview": "vite preview --host 0.0.0.0",
+    "dev:ui": "vite --host 0.0.0.0",
     "start": "node server/index.mjs",
     "test": "node --test test/*.test.mjs"
   },

@@ -1,0 +1,1341 @@
+/* A compact protocol-analysis surface. Call color stays stable across all messages. */
+.voip-workspace {
+  --voip-ink: #233448;
+  --voip-muted: #596c80;
+  --voip-line: #dce4ed;
+  --voip-surface: #fff;
+  --voip-subtle: #f6f8fb;
+  --voip-blue: #265ec3;
+  --voip-time-width: 164px;
+  background: var(--voip-surface);
+  border: 1px solid var(--voip-line);
+  border-radius: 10px;
+  padding: 0;
+  color: var(--voip-ink);
+  box-shadow: 0 2px 6px #1c365006;
+  min-width: 0;
+  overflow: hidden;
+}
+.voip-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px 18px;
+}
+.voip-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.7px;
+  color: var(--voip-muted);
+}
+.voip-heading h1 {
+  margin: 6px 0;
+  font-size: 22px;
+  line-height: 1.35;
+  font-weight: 650;
+  letter-spacing: -0.5px;
+}
+.voip-heading p {
+  font-size: 12px;
+  color: var(--voip-muted);
+  margin: 0;
+  line-height: 1.7;
+}
+.voip-packets-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--voip-line);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #fff;
+  color: var(--voip-ink);
+}
+.voip-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding: 12px 24px;
+  background: var(--voip-subtle);
+  border-block: 1px solid var(--voip-line);
+  font-size: 12px;
+  color: var(--voip-muted);
+}
+.voip-summary > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.voip-summary strong {
+  color: var(--voip-ink);
+  font: 650 14px var(--mono);
+}
+.voip-summary .voip-summary-hint {
+  margin-left: auto;
+  font-size: 11px;
+}
+.voip-call-list {
+  margin: 20px 24px 0;
+  border: 1px solid var(--voip-line);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.voip-call-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--voip-subtle);
+  border-bottom: 1px solid var(--voip-line);
+}
+.voip-call-list-heading > span {
+  font-size: 12px;
+  font-weight: 650;
+}
+.voip-call-list-heading small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--voip-muted);
+  margin-left: 10px;
+}
+.voip-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--voip-muted);
+}
+.voip-search input {
+  min-width: 0;
+  width: 180px;
+  border: 0;
+  background: transparent;
+  color: var(--voip-ink);
+  font-size: 12px;
+  height: 28px;
+  padding: 0 4px;
+}
+.voip-search input::placeholder {
+  color: var(--voip-muted);
+}
+.voip-call-table-wrap {
+  max-height: 258px;
+  overflow: auto;
+}
+.voip-call-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+.voip-call-table th {
+  background: #fff;
+  color: var(--voip-muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--voip-line);
+  white-space: nowrap;
+}
+.voip-call-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--voip-line);
+  vertical-align: middle;
+}
+.voip-call-table tr:last-child td {
+  border-bottom: 0;
+}
+.voip-call-table tr:hover td {
+  background: var(--voip-subtle);
+}
+.voip-call-table input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--voip-blue);
+  cursor: pointer;
+}
+.voip-call-table th:first-child,
+.voip-call-table td:first-child {
+  padding-right: 0;
+  width: 30px;
+}
+.voip-call-table td > small {
+  display: block;
+  font-size: 10px;
+  color: var(--voip-muted);
+  margin-top: 4px;
+}
+.voip-call-identity {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.voip-call-identity strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.voip-color-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--call-color);
+}
+.voip-call-0 {
+  --call-color: #2864c2;
+  --call-tint: #eef4ff;
+}
+.voip-call-1 {
+  --call-color: #8650b8;
+  --call-tint: #f7f0ff;
+}
+.voip-call-2 {
+  --call-color: #087e80;
+  --call-tint: #edf9f8;
+}
+.voip-call-3 {
+  --call-color: #ac651b;
+  --call-tint: #fff5e8;
+}
+.voip-call-4 {
+  --call-color: #b04270;
+  --call-tint: #fff1f7;
+}
+.voip-call-5 {
+  --call-color: #52618f;
+  --call-tint: #f1f3fa;
+}
+.voip-message-row.is-side-left {
+  --call-color: #2f6fd3;
+  --call-tint: #eef4ff;
+}
+.voip-message-row.is-side-right {
+  --call-color: #8052c6;
+  --call-tint: #f5f0ff;
+}
+.voip-call-id {
+  display: block;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--voip-muted);
+  font: 10px var(--mono);
+  margin: 5px 0 0 14px;
+}
+.voip-call-route {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 10px var(--mono);
+  white-space: nowrap;
+}
+.voip-call-route svg {
+  color: var(--voip-muted);
+  flex-shrink: 0;
+}
+.voip-call-table td > code {
+  font: 11px var(--mono);
+  white-space: nowrap;
+}
+.voip-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #397258;
+  border: 1px solid #d5e8dd;
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: #f3faf6;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.voip-status.is-error {
+  color: #a74642;
+  border-color: #efd6d2;
+  background: #fff6f5;
+}
+.voip-only {
+  color: var(--voip-blue);
+  font-size: 10px;
+  white-space: nowrap;
+  min-height: 30px;
+  padding: 0 4px;
+}
+.voip-call-table .is-muted {
+  opacity: 0.55;
+}
+.voip-no-match {
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--voip-muted);
+}
+.voip-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 20px 24px 12px;
+}
+.voip-view-toggle {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--voip-line);
+  border-radius: 6px;
+  padding: 3px;
+  background: var(--voip-subtle);
+}
+.voip-view-toggle button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  min-height: 30px;
+  color: var(--voip-muted);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.voip-view-toggle button[aria-pressed="true"] {
+  background: #fff;
+  color: var(--voip-blue);
+  box-shadow: 0 1px 3px #24374e15;
+  font-weight: 600;
+}
+.voip-time-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.voip-time-controls label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--voip-muted);
+}
+.voip-time-controls select {
+  border: 1px solid var(--voip-line);
+  background: #fff;
+  color: var(--voip-ink);
+  border-radius: 5px;
+  height: 32px;
+  font-size: 11px;
+  padding: 0 24px 0 9px;
+}
+.voip-selected-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 24px 12px;
+  font-size: 10px;
+  color: var(--voip-muted);
+}
+.voip-selected-legend > span {
+  margin-right: 2px;
+}
+.voip-selected-legend button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 8px;
+  background: var(--call-tint);
+  color: var(--call-color);
+  border-radius: 4px;
+  font-size: 10px;
+}
+.voip-selected-legend button > span {
+  font-family: var(--mono);
+  margin-left: 2px;
+}
+.voip-workspace .voip-chart {
+  margin: 0 24px 20px;
+  background: #fff;
+  border: 1px solid var(--voip-line);
+  border-radius: 6px;
+  box-shadow: none;
+  overflow: hidden;
+}
+.voip-chart-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--voip-line);
+}
+.voip-chart-title > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.voip-chart-title small {
+  color: var(--voip-muted);
+  font-size: 10px;
+  font-weight: 400;
+  margin-left: 4px;
+}
+.voip-chart-note {
+  font-size: 10px;
+  color: var(--voip-muted);
+}
+.voip-chart-scroll {
+  overflow-x: auto;
+}
+.voip-chart-canvas {
+  min-width: calc(
+    var(--voip-time-width) + var(--lane-count) * 132px
+  );
+}
+.voip-lane-header {
+  display: grid;
+  grid-template-columns: var(--voip-time-width) minmax(0, 1fr);
+  border-bottom: 1px solid var(--voip-line);
+  background: var(--voip-subtle);
+}
+.voip-time-heading {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 12px 14px;
+  font-size: 11px;
+  color: var(--voip-ink);
+}
+.voip-time-heading small {
+  font-size: 9px;
+  color: var(--voip-muted);
+}
+.voip-time-heading {
+  border-right: 1px solid var(--voip-line);
+}
+.voip-endpoints {
+  display: grid;
+  grid-template-columns: repeat(var(--lane-count), minmax(0, 1fr));
+}
+.voip-workspace .voip-endpoint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 6px 12px;
+  border: 0;
+  min-width: 0;
+}
+.voip-workspace .voip-endpoint-letter {
+  display: grid;
+  place-items: center;
+  height: 20px;
+  width: 20px;
+  border-radius: 5px;
+  background: #e8edf5;
+  color: #51667f;
+  font: 600 10px var(--mono);
+}
+.voip-workspace .voip-endpoint.is-left .voip-endpoint-letter {
+  background: #e8f0ff;
+  color: #2f6fd3;
+  box-shadow: inset 0 0 0 1px #c9daf4;
+}
+.voip-workspace .voip-endpoint.is-right .voip-endpoint-letter {
+  background: #f1eaff;
+  color: #8052c6;
+  box-shadow: inset 0 0 0 1px #d8c8f0;
+}
+.voip-workspace .voip-endpoint code {
+  color: var(--voip-ink);
+  font: 600 10px var(--mono);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-overflow: clip;
+  max-width: 100%;
+}
+.voip-chart-body {
+  position: relative;
+}
+.voip-lifelines {
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--voip-time-width);
+  right: 0;
+  z-index: 1;
+}
+.voip-lifelines > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed #bdc9d8;
+}
+.voip-message-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--voip-time-width) minmax(0, 1fr);
+  width: 100%;
+  min-height: 62px;
+  padding: 0;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid #edf1f6;
+  background: transparent;
+  color: var(--voip-ink);
+}
+.voip-message-row:last-child {
+  border-bottom: 0;
+}
+.voip-message-row:hover {
+  background: var(--call-tint);
+}
+.voip-message-row:focus-visible {
+  outline: 2px solid var(--voip-blue);
+  outline-offset: -2px;
+  z-index: 3;
+}
+.voip-workspace .voip-message-time {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 9px 14px;
+  border-right: 1px solid var(--voip-line);
+  background: #fafbfd;
+  gap: 6px;
+}
+.voip-workspace .voip-message-time strong {
+  font: 500 10px var(--mono);
+  color: var(--voip-ink);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+.voip-workspace .voip-message-time .sip-sequence-delta {
+  font: 10px var(--mono);
+  color: var(--voip-muted);
+  white-space: nowrap;
+}
+.voip-signal {
+  position: relative;
+  min-width: 0;
+  z-index: 2;
+}
+.voip-signal-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 60px;
+  overflow: visible;
+  color: var(--call-color);
+  pointer-events: none;
+}
+.voip-signal-line path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+.voip-signal-label {
+  position: absolute;
+  top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 5px;
+  height: 18px;
+  white-space: nowrap;
+  color: var(--call-color);
+}
+.voip-signal-label strong {
+  background: #fff;
+  font: 600 10px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1px 3px;
+}
+.voip-signal-call {
+  font: 9px var(--mono);
+  color: var(--call-color);
+  background: var(--call-tint);
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+.voip-signal-label em {
+  font-style: normal;
+  font-size: 8px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  background: #fff;
+}
+.voip-port {
+  position: absolute;
+  top: 40px;
+  transform: translateX(-50%);
+  background: #fff;
+  color: var(--voip-muted);
+  font: 8px var(--mono);
+  padding: 0 3px;
+}
+.voip-idle {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f3f8;
+  height: 26px;
+  border-block: 1px solid var(--voip-line);
+  color: var(--voip-muted);
+  font: 9px var(--mono);
+}
+.voip-idle span {
+  padding: 0 12px;
+  background: #f0f3f8;
+}
+.voip-chart-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--voip-line);
+  background: var(--voip-subtle);
+  color: var(--voip-muted);
+  font-size: 9px;
+}
+.voip-pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.voip-pagination button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--voip-line);
+  border-radius: 4px;
+  background: #fff;
+}
+.voip-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 64px 20px;
+  min-height: 280px;
+  text-align: center;
+  color: var(--voip-muted);
+  font-size: 12px;
+}
+.voip-state > svg {
+  color: var(--voip-blue);
+}
+.voip-state > strong {
+  color: var(--voip-ink);
+  font-size: 14px;
+}
+.voip-state button {
+  min-height: 36px;
+  color: var(--voip-blue);
+  border: 1px solid var(--voip-line);
+  padding: 0 14px;
+  border-radius: 5px;
+  margin-top: 5px;
+}
+.voip-workspace button,
+.voip-workspace select {
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.voip-workspace :is(button, input, select):focus-visible,
+.voip-chart-scroll:focus-visible {
+  outline: 2px solid var(--voip-blue);
+  outline-offset: 2px;
+}
+.voip-workspace button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.main-content-sipFlow .page-heading {
+  display: none;
+}
+.main-content-sipFlow .capture-card {
+  margin-bottom: 16px;
+}
+.main-content-sipFlow .capture-metrics {
+  display: none;
+}
+.voip-message-block {
+  min-width: 0;
+}
+.voip-message-row.is-expanded {
+  background: var(--call-tint);
+  box-shadow: inset 3px 0 0 var(--call-color);
+}
+.voip-message-row.is-side-right.is-expanded {
+  box-shadow: inset -3px 0 0 var(--call-color);
+}
+.voip-inline-detail {
+  width: min(720px, calc(100% - var(--voip-time-width) - 12px));
+  max-width: calc(100% - var(--voip-time-width) - 12px);
+  margin: 0 0 10px var(--voip-time-width);
+  border: 1px solid #c7d6e9;
+  border-left: 3px solid #3c73c7;
+  border-radius: 8px;
+  background: #f8fbff;
+  box-shadow: 0 5px 16px #173c6814;
+  overflow: hidden;
+  text-align: left;
+}
+.voip-inline-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 7px 9px 7px 11px;
+  background: #f1f6ff;
+  border-bottom: 1px solid #d6e2f4;
+}
+.voip-inline-detail-header > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  min-width: 0;
+}
+.voip-inline-kicker {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid #bcd0ec;
+  border-radius: 4px;
+  background: #e7f0ff;
+  color: #2d62ad;
+  font: 700 9px var(--mono);
+  letter-spacing: 0.4px;
+}
+.voip-inline-packet-id {
+  color: #5d7087;
+  font: 500 10px var(--mono);
+}
+.voip-inline-detail-header strong {
+  color: var(--voip-ink);
+  font: 650 12px var(--mono);
+}
+.voip-inline-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--voip-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 54px;
+  height: 30px;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid #bfd0e6;
+  border-radius: 5px;
+  color: var(--voip-blue);
+  background: #fff;
+  font-size: 10px;
+  font-weight: 600;
+}
+.voip-inline-close:hover {
+  border-color: #8eabd2;
+  background: #eaf2ff;
+}
+.voip-inline-body-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 12px;
+  border-bottom: 1px solid #e3ebf5;
+  background: #f8fbff;
+  color: #4d6682;
+  font-size: 10px;
+  font-weight: 650;
+}
+.voip-inline-body-heading small {
+  color: #8293a8;
+  font: 9px var(--mono);
+}
+.voip-inline-meta {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(150px, 1.2fr) 100px 90px;
+  gap: 1px;
+  background: #e3ebf5;
+  border-bottom: 1px solid #d6e2f4;
+}
+.voip-inline-meta > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 12px;
+  background: #fff;
+}
+.voip-inline-meta small {
+  color: var(--voip-muted);
+  font-size: 10px;
+}
+.voip-inline-meta code,
+.voip-inline-meta strong {
+  overflow: hidden;
+  color: var(--voip-ink);
+  font: 600 11px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 1fr);
+  gap: 12px;
+  padding: 12px;
+}
+.voip-inline-layer-panel,
+.voip-inline-bytes-panel {
+  min-width: 0;
+  border: 1px solid var(--voip-line);
+  border-radius: 5px;
+  background: #fff;
+  overflow: hidden;
+}
+.voip-inline-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--voip-line);
+  background: var(--voip-subtle);
+  color: var(--voip-ink);
+  font-size: 11px;
+  font-weight: 650;
+}
+.voip-inline-section-title small {
+  color: var(--voip-muted);
+  font: 10px var(--mono);
+  font-weight: 500;
+}
+.voip-inline-layers {
+  max-height: 270px;
+  overflow: auto;
+  padding: 5px 8px 7px;
+}
+.voip-inline-field {
+  border-bottom: 1px solid #edf1f6;
+}
+.voip-inline-field:last-child {
+  border-bottom: 0;
+}
+.voip-inline-field summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  padding: 5px 3px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--voip-ink);
+  font-size: 11px;
+}
+.voip-inline-field summary::-webkit-details-marker {
+  display: none;
+}
+.voip-inline-field summary::before {
+  content: "▸";
+  width: 12px;
+  color: #8b9caf;
+  font-size: 10px;
+}
+.voip-inline-field[open] > summary::before {
+  content: "▾";
+}
+.voip-inline-field summary > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-field summary code {
+  max-width: 58%;
+  overflow: hidden;
+  color: var(--voip-muted);
+  font: 10px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-field-children {
+  margin: 0 0 4px 14px;
+  padding-left: 7px;
+  border-left: 1px solid #d6e2f4;
+}
+.voip-inline-field.depth-1 summary {
+  color: #405367;
+}
+.voip-inline-field.depth-2 summary,
+.voip-inline-field.depth-3 summary {
+  color: var(--voip-muted);
+  font-size: 10px;
+}
+.voip-inline-bytes-panel pre {
+  max-height: 270px;
+  min-height: 100px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  color: #38526d;
+  background: #fbfcfe;
+  font: 10px/1.7 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.voip-inline-state {
+  padding: 18px 14px;
+  color: var(--voip-muted);
+  font-size: 11px;
+}
+.voip-inline-state.is-error {
+  color: #b42318;
+  background: #fff7f6;
+}
+.voip-inline-meta {
+  display: flex;
+  gap: 1px;
+  background: #e7edf4;
+  border-bottom-color: #e0e7ef;
+}
+.voip-inline-meta > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 9px;
+  background: #fff;
+}
+.voip-inline-meta small {
+  flex: 0 0 auto;
+  font-size: 9px;
+}
+.voip-inline-meta code,
+.voip-inline-meta strong {
+  font-size: 10px;
+}
+.voip-inline-compact-layers {
+  padding: 3px 9px 4px;
+  background: #fff;
+}
+.voip-inline-layer-row {
+  display: block;
+  border-bottom: 1px solid #edf1f6;
+}
+.voip-inline-layer-row:last-child {
+  border-bottom: 0;
+}
+.voip-inline-layer-summary {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.9fr) minmax(0, 1.6fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 30px;
+  padding: 0 2px;
+  position: relative;
+  cursor: pointer;
+  list-style: none;
+}
+.voip-inline-layer-summary::-webkit-details-marker {
+  display: none;
+}
+.voip-inline-layer-summary::before {
+  content: "▸";
+  position: absolute;
+  margin-left: -11px;
+  color: #8b9caf;
+  font-size: 9px;
+}
+.voip-inline-layer-row[open] > .voip-inline-layer-summary::before {
+  content: "▾";
+}
+.voip-inline-layer-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+.voip-inline-layer-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--voip-ink);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-layer-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font: 700 9px var(--mono);
+  letter-spacing: 0.3px;
+}
+.voip-inline-layer-badge.is-ip {
+  color: #2459a6;
+  background: #e7f0ff;
+}
+.voip-inline-layer-badge.is-udp {
+  color: #24724d;
+  background: #e6f6ed;
+}
+.voip-inline-layer-badge.is-sip {
+  color: #75419b;
+  background: #f2eafa;
+}
+.voip-inline-layer-fields {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.voip-inline-layer-preview {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  overflow: hidden;
+}
+.voip-inline-layer-preview code {
+  max-width: 220px;
+  overflow: hidden;
+  color: #687b90;
+  font: 9px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-layer-expand {
+  color: var(--voip-muted);
+  font: 9px var(--mono);
+  white-space: nowrap;
+}
+.voip-inline-sdp-hint {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin: -2px 0 4px 42px;
+  overflow: hidden;
+  color: #6a5780;
+  font: 9px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-sdp-hint b {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #75419b;
+  background: #f2eafa;
+  font-size: 8px;
+}
+.voip-inline-layer-fields.is-expanded {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px 14px;
+  margin: 0 0 6px 42px;
+  padding: 6px 0 2px;
+  border-top: 1px solid #edf1f6;
+}
+.voip-inline-layer-fields > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
+}
+.voip-inline-layer-fields small {
+  color: #7b8a9b;
+  font: 9px var(--mono);
+}
+.voip-inline-layer-fields code {
+  max-width: 260px;
+  overflow: hidden;
+  color: #465a70;
+  font: 9px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voip-inline-empty {
+  display: block;
+  padding: 7px 2px;
+  color: var(--voip-muted);
+  font-size: 10px;
+}
+.voip-inline-raw-sip {
+  max-height: min(220px, 30vh);
+  margin: 0;
+  overflow: auto;
+  padding: 10px 12px 12px;
+  color: #2f4965;
+  background: #fff;
+  font: 9px/1.55 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  scrollbar-gutter: stable;
+}
+.voip-inline-state {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  padding: 10px 12px;
+  color: var(--voip-muted);
+  font-size: 10px;
+}
+.voip-inline-state.is-error {
+  color: #a23939;
+  background: #fff7f7;
+}
+@media (max-width: 1200px) {
+  .voip-workspace {
+    --voip-time-width: 150px;
+  }
+  .voip-call-route {
+    font-size: 9px;
+  }
+  .voip-call-table th,
+  .voip-call-table td {
+    padding-inline: 9px;
+  }
+  .voip-call-table th:nth-child(5),
+  .voip-call-table td:nth-child(5) {
+    display: none;
+  }
+  .voip-summary .voip-summary-hint {
+    display: none;
+  }
+  .voip-inline-detail {
+    width: min(680px, calc(100% - 24px));
+    max-width: calc(100% - 24px);
+    margin-left: 12px;
+  }
+  .voip-inline-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .voip-inline-grid {
+    grid-template-columns: 1fr;
+  }
+  .voip-inline-layer-row {
+    grid-template-columns: minmax(190px, 0.8fr) minmax(0, 1.2fr);
+  }
+}
+@media (max-width: 767px) {
+  .voip-heading {
+    padding: 18px 16px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .voip-heading h1 {
+    font-size: 20px;
+  }
+  .voip-packets-button {
+    min-height: 44px;
+  }
+  .voip-summary {
+    padding: 12px 16px;
+    gap: 16px;
+  }
+  .voip-call-list {
+    margin: 16px 12px 0;
+  }
+  .voip-call-list-heading {
+    flex-wrap: wrap;
+  }
+  .voip-search {
+    width: 100%;
+  }
+  .voip-search input {
+    width: 100%;
+    min-height: 36px;
+    font-size: 16px;
+  }
+  .voip-call-table {
+    min-width: 560px;
+  }
+  .voip-call-table td {
+    padding-block: 12px;
+  }
+  .voip-call-table input[type="checkbox"] {
+    width: 20px;
+    height: 20px;
+  }
+  .voip-only {
+    min-height: 44px;
+  }
+  .voip-controls {
+    padding: 16px 12px 12px;
+    gap: 12px;
+  }
+  .voip-view-toggle {
+    width: 100%;
+  }
+  .voip-view-toggle button {
+    min-height: 40px;
+    flex: 1;
+  }
+  .voip-time-controls {
+    width: 100%;
+    gap: 8px;
+  }
+  .voip-time-controls label {
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .voip-time-controls select {
+    min-height: 44px;
+    width: 100%;
+    font-size: 12px;
+  }
+  .voip-selected-legend {
+    padding-inline: 12px;
+  }
+  .voip-selected-legend button {
+    min-height: 40px;
+  }
+  .voip-workspace .voip-chart {
+    margin: 0 12px 12px;
+  }
+  .voip-chart-title {
+    flex-wrap: wrap;
+  }
+  .voip-chart-title small {
+    margin-left: 0;
+  }
+  .voip-chart-title > span:first-child {
+    flex-wrap: wrap;
+  }
+  .voip-chart-note {
+    display: none;
+  }
+  .voip-inline-detail {
+    width: calc(100% - 16px);
+    max-width: none;
+    margin: 0 8px 9px;
+  }
+  .voip-inline-meta {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+  .voip-inline-grid {
+    padding: 9px;
+  }
+  .voip-inline-meta {
+    flex-wrap: wrap;
+  }
+  .voip-inline-meta > span {
+    flex: 1 1 45%;
+  }
+  .voip-inline-layer-row {
+    padding: 5px 0;
+  }
+  .voip-inline-layer-summary {
+    grid-template-columns: 1fr auto;
+    gap: 4px 8px;
+  }
+  .voip-inline-layer-summary .voip-inline-layer-heading {
+    grid-column: 1 / -1;
+  }
+  .voip-inline-layer-preview {
+    grid-column: 1;
+  }
+  .voip-inline-layer-expand {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .voip-inline-layer-fields {
+    padding-left: 42px;
+  }
+}
+.voip-inline-detail.is-align-left {
+  margin-left: var(--voip-time-width);
+  margin-right: auto;
+  border-left: 3px solid #2f6fd3;
+  border-right: 1px solid #c7d6e9;
+  background: #f8fbff;
+}
+.voip-inline-detail.is-align-right {
+  margin-left: auto;
+  margin-right: 0;
+  border-left: 1px solid #ddd3ef;
+  border-right: 3px solid #8052c6;
+  background: #fbf9ff;
+}
+.voip-inline-detail.is-align-center {
+  margin-left: auto;
+  margin-right: auto;
+  border-left: 3px solid #607aa5;
+  border-right: 1px solid #c7d6e9;
+}
+.voip-inline-detail.is-align-right .voip-inline-detail-header {
+  background: #f5f0ff;
+  border-bottom-color: #e4d9f4;
+}
+.voip-inline-detail.is-align-right .voip-inline-kicker {
+  border-color: #d4c3ed;
+  background: #ede4ff;
+  color: #7045af;
+}
+@media (max-width: 767px) {
+  .voip-inline-detail.is-align-left,
+  .voip-inline-detail.is-align-right,
+  .voip-inline-detail.is-align-center {
+    width: calc(100% - 16px);
+    max-width: none;
+    margin-right: 8px;
+    margin-left: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voip-workspace * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
-import { startTestServer } from "./helpers.mjs";
+import { startTestServer, waitCapture } from "./helpers.mjs";
+import { buildSipMultiCallPcap } from "../server/fixtures.mjs";
 test("UI boots on real capture; right-click filters, error recovery and per-stream PT save work", async () => {
   const server = await startTestServer();
   const output = await mkdtemp(
@@ -68,7 +69,10 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
     }
     const button = (text, scope = document) =>
       [...scope.querySelectorAll("button")].find(
-        (b) => b.textContent.trim() === text,
+        (b) =>
+          b.textContent.trim() === text ||
+          b.getAttribute("aria-label") === text ||
+          b.getAttribute("title") === text,
       );
     async function click(el) {
       assert.ok(el, "button must exist");
@@ -105,6 +109,86 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       document.querySelector(".capture-file-title strong").textContent,
       "webshark-demo.pcap",
     );
+    assert.ok(button("Time"), "time column uses compact header label");
+    assert.equal(button("Seconds Since Beginning of Capture"), undefined);
+    assert.equal(
+      document.querySelectorAll(".column-resizer").length,
+      document.querySelectorAll(".packet-table thead th").length,
+    );
+    await click(button("TCP"));
+    await wait(
+      () =>
+        document.querySelector("#packet-filter").value === "tcp" &&
+        button("TCP").getAttribute("aria-pressed") === "true",
+      "TCP preset filter",
+    );
+    assert.equal(button("TCP").getAttribute("aria-pressed"), "true");
+    await click(button("TCP"));
+    await wait(
+      () =>
+        document.querySelector("#packet-filter").value === "" &&
+        document.querySelectorAll(".packet-table tbody tr").length === 100,
+      "toggle TCP preset off",
+    );
+    assert.equal(button("TCP").getAttribute("aria-pressed"), "false");
+    await click(button("数据包列与时间设置"));
+    await select(document.querySelector("#time-format"), "epoch");
+    const infoColumn = document.querySelector('[aria-label="显示 信息"]');
+    await act(() =>
+      infoColumn.dispatchEvent(
+        new dom.window.MouseEvent("click", { bubbles: true }),
+      ),
+    );
+    await fill(
+      document.querySelector('[aria-label="新增字段列"]'),
+      "dns.qry.name",
+    );
+    await click(button("添加字段列"));
+    assert.ok(
+      [...document.querySelectorAll(".column-config-row")].some((row) =>
+        row.textContent.includes("DNS 查询名"),
+      ),
+    );
+    assert.equal(
+      document.querySelector(".column-config-row").getAttribute("draggable"),
+      "true",
+    );
+    await click(button("上移 协议"));
+    assert.equal(
+      [...document.querySelectorAll(".column-config-row strong")][3].textContent,
+      "协议",
+    );
+    await click(button("完成"));
+    assert.ok(
+      [...document.querySelectorAll(".packet-table thead th")].some((th) =>
+        th.textContent.includes("DNS 查询名"),
+      ),
+    );
+    assert.equal(
+      [...document.querySelectorAll(".packet-table thead th")].some((th) =>
+        th.textContent.includes("信息"),
+      ),
+      false,
+    );
+    await click(button("数据包列与时间设置"));
+    await click(button("恢复默认列"));
+    await click(button("完成"));
+    assert.ok(
+      [...document.querySelectorAll(".packet-table thead th")].some((th) =>
+        th.textContent.includes("信息"),
+      ),
+    );
+    await click(button("包比较"));
+    await click(document.querySelector(".packet-table tbody tr"));
+    await click(document.querySelectorAll(".packet-table tbody tr")[1]);
+    await click(button("查看差异"));
+    assert.match(
+      document.querySelector('[role="dialog"]').textContent,
+      /比较数据包 #/,
+    );
+    await click(button("完成", document.querySelector('[role="dialog"]')));
+    await click(button("选择中 2/2"));
+    await click(button("长度"));
     const row = [...document.querySelectorAll(".packet-table tbody tr")].find(
       (r) => r.cells[0].textContent === "49",
     );
@@ -123,6 +207,36 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       document.querySelector(".context-caption code").textContent,
       "ip.src == 10.10.0.10",
     );
+    assert.ok(button("应用为列"), "field context menu exposes apply as column");
+    assert.ok(button("解码为…"), "transport context menu exposes Decode As");
+    await click(button("解码为…"));
+    assert.equal(
+      document.querySelector('[role="dialog"] #decode-as-protocol').value,
+      "rtp",
+    );
+    await click(button("取消", document.querySelector('[role="dialog"]')));
+    await act(() =>
+      row.cells[2].dispatchEvent(
+        new dom.window.MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY: 100,
+        }),
+      ),
+    );
+    await click(button("应用为列"));
+    assert.match(document.querySelector(".toast").textContent, /源地址/);
+    await act(() =>
+      row.cells[2].dispatchEvent(
+        new dom.window.MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY: 100,
+        }),
+      ),
+    );
     await click(button("应用为过滤器"));
     await wait(
       () => document.querySelectorAll(".packet-table tbody tr").length === 69,
@@ -131,6 +245,36 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
     assert.equal(
       document.querySelector("#packet-filter").value,
       "ip.src == 10.10.0.10",
+    );
+    await click(button("保存当前视图"));
+    await fill(document.querySelector("#saved-view-name"), "源地址分析");
+    await click(button("保存视图", document.querySelector('[role="dialog"]')));
+    assert.equal(document.querySelectorAll(".saved-view-row").length, 1);
+    assert.match(
+      document.querySelector(".saved-view-row").textContent,
+      /源地址分析/,
+    );
+    await click(button("RTP"));
+    await wait(
+      () =>
+        document.querySelector("#packet-filter").value === "rtp" &&
+        !document.querySelector(".packet-panel.is-loading"),
+      "RTP saved view filter",
+    );
+    await click(button("保存当前视图"));
+    await fill(document.querySelector("#saved-view-name"), "RTP 媒体");
+    await click(button("保存视图", document.querySelector('[role="dialog"]')));
+    assert.equal(document.querySelectorAll(".saved-view-row").length, 2);
+    await act(() =>
+      document
+        .querySelectorAll(".saved-view-main")[1]
+        .dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })),
+    );
+    await wait(
+      () =>
+        document.querySelector("#packet-filter").value ===
+        "ip.src == 10.10.0.10",
+      "restore saved view",
     );
     await fill(document.querySelector("#packet-filter"), "invalid expression");
     await click(document.querySelector(".apply-button"));
@@ -147,6 +291,36 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       () => document.querySelectorAll(".packet-table tbody tr").length === 100,
       "clear filter",
     );
+    await click(
+      [...document.querySelectorAll(".nav-item")].find((b) =>
+        b.textContent.includes("SIP 时序图"),
+      ),
+    );
+    await wait(
+      () => document.querySelectorAll(".sip-sequence-card").length === 1,
+      "SIP sequence view",
+    );
+    assert.match(
+      document.querySelector(".sip-sequence-lane code").textContent,
+      /192\.168\.1\.108/,
+    );
+    assert.match(
+      document.querySelector(".sip-sequence-delta").textContent,
+      /首条消息/,
+    );
+    assert.match(
+      document.querySelectorAll(".sip-sequence-delta")[1].textContent,
+      /ms/,
+    );
+    assert.ok(document.querySelector("#sip-time-format"));
+    assert.ok(document.querySelector("#sip-session-gap"));
+    await select(document.querySelector("#sip-time-format"), "local");
+    assert.match(
+      document.querySelector(".sip-sequence-time strong").textContent,
+      /^\d{4}-\d{2}-\d{2}/,
+    );
+    await select(document.querySelector("#sip-session-gap"), "0.5");
+    assert.equal(document.querySelector("#sip-session-gap").value, "0.5");
     await click(
       [...document.querySelectorAll(".nav-item")].find((b) =>
         b.textContent.includes("RTP 媒体流"),
@@ -223,6 +397,154 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
     await click(button("编辑", document.querySelector(".mapping-item")));
     assert.equal(document.querySelector("#mapping-codec").value, "AMR-WB");
     assert.equal(document.querySelector("#mapping-octet-align").value, "1");
+    await click(button("取消", document.querySelector('[role="dialog"]')));
+    await click(button("关闭文件"));
+    await wait(
+      () => !document.querySelector(".capture-card"),
+      "close current capture",
+    );
+    assert.match(
+      document.querySelector(".empty-state").textContent,
+      /当前未打开 pcap 文件/,
+    );
+    assert.equal(sessionStorage.getItem("webshark-capture"), "closed");
+    const recent = [...document.querySelectorAll(".recent-file")].find((b) =>
+      b.textContent.includes("webshark-demo.pcap"),
+    );
+    assert.ok(recent, "closed capture remains in recent files");
+    await click(recent);
+    await wait(
+      () => document.querySelectorAll(".packet-table tbody tr").length === 100,
+      "reopen closed capture",
+    );
+    assert.equal(sessionStorage.getItem("webshark-capture"), saved[0].id);
+    let multi;
+    await act(async () => {
+      multi = await realFetch(server.base + "/api/captures", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-File-Name": "sip-multi-call-demo.pcap",
+        },
+        body: buildSipMultiCallPcap(),
+      }).then((r) => r.json());
+      await waitCapture(server.base, multi.id);
+    });
+    await act(() => root.unmount());
+    sessionStorage.setItem("webshark-capture", multi.id);
+    root = createRoot(document.getElementById("root"));
+    await act(() => root.render(React.createElement(App)));
+    await wait(
+      () => document.querySelectorAll(".packet-table tbody tr").length === 11,
+      "multi-call PCAP loaded",
+    );
+    await click(
+      [...document.querySelectorAll(".nav-item")].find((b) =>
+        b.textContent.includes("SIP 时序图"),
+      ),
+    );
+    await wait(
+      () => document.querySelectorAll(".voip-message-row").length === 11,
+      "all interleaved SIP messages",
+    );
+    assert.equal(
+      document.querySelectorAll(".voip-call-table tbody tr").length,
+      2,
+    );
+    assert.equal(document.querySelectorAll(".voip-endpoint").length, 4);
+    assert.equal(document.querySelectorAll(".voip-chart").length, 1);
+    assert.match(
+      document.querySelector(".voip-selected-legend").textContent,
+      /C ↔ D/,
+    );
+    assert.equal(
+      document.querySelectorAll(".voip-idle").length,
+      1,
+      "long silence is a marker, not a new call",
+    );
+    await click(button("按会话分组"));
+    assert.equal(document.querySelectorAll(".voip-chart").length, 2);
+    assert.deepEqual(
+      [...document.querySelectorAll(".voip-endpoint-letter")].map(
+        (el) => el.textContent,
+      ),
+      ["A", "B", "C", "D"],
+    );
+    await click(button("合并时序"));
+    await click(button("仅显示会话 2"));
+    assert.equal(document.querySelectorAll(".voip-message-row").length, 4);
+    assert.equal(document.querySelectorAll(".voip-endpoint").length, 2);
+    await click(document.querySelector('[aria-label="显示会话 1"]'));
+    assert.equal(document.querySelectorAll(".voip-message-row").length, 11);
+    await fill(document.querySelector('[aria-label="搜索 SIP 会话"]'), "carol");
+    assert.equal(document.querySelectorAll(".voip-message-row").length, 4);
+    await fill(document.querySelector('[aria-label="搜索 SIP 会话"]'), "");
+    const lastMessage = [...document.querySelectorAll(".voip-message-row")].at(
+      -1,
+    );
+    await click(lastMessage);
+    await wait(
+      () =>
+        document.querySelector(".voip-inline-raw-sip") &&
+        document
+          .querySelector(".voip-inline-detail")
+          ?.textContent.includes("数据包 #11"),
+      "signal expands its inline packet detail",
+    );
+    assert.ok(document.querySelector(".voip-chart"), "flow remains visible");
+    assert.ok(
+      document.querySelector(".voip-message-row.is-side-right.is-expanded"),
+      "reverse messages use the right-side color",
+    );
+    assert.ok(
+      document.querySelector(".voip-inline-detail.is-align-right"),
+      "reverse message details align with the sending side",
+    );
+    assert.equal(
+      document.querySelector(".voip-message-detail"),
+      null,
+      "flow rows do not duplicate details in a right-side column",
+    );
+    assert.equal(
+      document.querySelector(".voip-comment-heading"),
+      null,
+      "flow header does not render an unused details column",
+    );
+    assert.equal(
+      document.querySelector(".voip-inline-compact-layers"),
+      null,
+      "inline detail does not render protocol layer cards",
+    );
+    assert.match(
+      document.querySelector(".voip-inline-raw-sip").textContent,
+      /SIP\/2\.0 200 OK/,
+      "inline detail renders the raw SIP message",
+    );
+    await click(lastMessage);
+    assert.equal(
+      document.querySelector(".voip-inline-detail"),
+      null,
+      "clicking the same message collapses its detail",
+    );
+    const sdpMessage = [...document.querySelectorAll(".voip-message-row")].find(
+      (message) => message.getAttribute("title")?.includes("#8"),
+    );
+    await click(sdpMessage);
+    await wait(
+      () =>
+        document
+          .querySelector(".voip-inline-raw-sip")
+          ?.textContent.includes("m=audio 20000 RTP/AVP 0"),
+      "200 OK exposes the raw SDP body",
+    );
+    assert.ok(
+      document.querySelector(".voip-inline-detail.is-align-right"),
+      "200 OK details align with the right-side sender",
+    );
+    assert.match(
+      document.querySelector(".voip-inline-raw-sip").textContent,
+      /Content-Type: application\/sdp/,
+    );
     await act(() => root.unmount());
     root = null;
     globalThis.fetch = realFetch;

@@ -29,7 +29,25 @@ test("raw upload, status polling, real packet detail and pagination API", async 
     `${server.base}/api/captures/${capture.id}/packets?page=1`,
   ).then((r) => r.json());
   assert.equal(page.packets[0].no, 101);
-  assert.equal(page.total, 187);
+  assert.equal(page.total, 194);
+  const largerPage = await fetch(
+    `${server.base}/api/captures/${capture.id}/packets?page=0&size=200`,
+  ).then((r) => r.json());
+  assert.equal(largerPage.pageSize, 200);
+  assert.equal(largerPage.packets.length, 194);
+});
+test("sip_mrcp media-port macro resolves the SIP dialog and RTP stream", async () => {
+  const response = await fetch(
+    `${server.base}/api/captures/${capture.id}/packets?filter=${encodeURIComponent("sip_mrcp.port=20000")}&size=200`,
+  );
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.relation.type, "sip_mrcp");
+  assert.equal(data.relation.port, 20000);
+  assert.equal(data.relation.matches.length, 1);
+  assert.ok(data.relation.matches[0].callId);
+  assert.ok(data.relation.matches[0].rtpStreams.length > 0);
+  assert.ok(data.packets.some((packet) => packet.protocol === "RTP"));
 });
 test("configuration reanalysis persists scoped mapping and makes WAV playable", async () => {
   const config = {

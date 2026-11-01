@@ -16,6 +16,7 @@ import {
   prepare,
   buildIndex,
   pageFromIndex,
+  argsFor,
   packetDetail,
   getIndex,
   followStream,
@@ -23,6 +24,8 @@ import {
   exportCapture,
   run,
   stopAll,
+  parseSdpBody,
+  parseSipMrcpFilter,
 } from "../server/engine.mjs";
 import { combineFilter } from "../src/api.js";
 let dir, capture;
@@ -64,16 +67,62 @@ const mapping = {
   ssrc: "0x12345678",
 };
 test("real PCAP index uses bounded pages and keeps original frame numbers", async () => {
-  assert.equal(capture.index.count, 187);
+  assert.equal(capture.index.count, 194);
   assert.equal((await pageFromIndex(capture.index, 0)).length, 100);
   const page = await pageFromIndex(capture.index, 1);
-  assert.equal(page.length, 87);
+  assert.equal(page.length, 94);
   assert.equal(page[0].no, 101);
+  assert.equal((await pageFromIndex(capture.index, 0, 200)).length, 194);
+  assert.equal((await pageFromIndex(capture.index, 1, 200)).length, 0);
   assert.equal(capture.index.summary.media.length, 2);
   assert.equal(
     capture.index.summary.media.find((s) => s.ssrc === "0x12345678").lost,
     1,
   );
+});
+test("demo capture includes a decodable SIP call flow", async () => {
+  const sipIndex = await getIndex(capture, "sip");
+  assert.equal(sipIndex.count, 7);
+  const sipPackets = await pageFromIndex(sipIndex);
+  assert.equal(sipPackets[0].no, 188);
+  assert.match(sipPackets[0].info, /INVITE sip:bob@atlas\.local/);
+  assert.ok(sipPackets.some((packet) => packet.info.includes("180 Ringing")));
+  assert.ok(sipPackets.some((packet) => packet.info.includes("BYE sip:bob")));
+});
+test("demo SIP offer and answer expose intentionally different media descriptions", async () => {
+  const offer = JSON.stringify(await packetDetail(capture, 188));
+  const answer = JSON.stringify(await packetDetail(capture, 191));
+  assert.match(offer, /video 20002 RTP\/AVP 98 99/);
+  assert.match(answer, /video 21002 RTP\/AVP 98/);
+  assert.match(offer, /AMR-WB/);
+  assert.match(offer, /AMR\/8000/);
+  assert.match(answer, /ptime:30/);
+  assert.match(offer, /profile-level-id=42e01f/);
+  assert.match(answer, /profile-level-id=640c1f/);
+  assert.match(answer, /goog-remb/);
+  assert.notEqual(offer, answer);
+});
+test("sip_mrcp macro syntax and SDP channel parsing keep MRCP and RTP media linked", () => {
+  assert.deepEqual(parseSipMrcpFilter("sip_mrcp.port=12345"), { port: 12345 });
+  assert.deepEqual(parseSipMrcpFilter("sip_mrcp.rtp_port eq 12345"), { port: 12345 });
+  assert.throws(() => parseSipMrcpFilter("sip_mrcp.port=70000"), /1–65535/);
+  const body = Buffer.from(
+    [
+      "v=0",
+      "c=IN IP4 10.10.0.20",
+      "m=application 32416 TCP/MRCPv2 1",
+      "a=channel:8F23@speechrecog",
+      "a=cmid:2",
+      "m=audio 48260 RTP/AVP 0 96",
+      "a=rtpmap:0 PCMU/8000",
+      "a=rtcp:48261",
+    ].join("\r\n"),
+  ).toString("hex");
+  const sdp = parseSdpBody(body);
+  assert.equal(sdp.media[0].proto, "TCP/MRCPv2");
+  assert.deepEqual(sdp.media[0].attributes, ["channel:8F23@speechrecog", "cmid:2"]);
+  assert.equal(sdp.media[1].port, 48260);
+  assert.deepEqual(sdp.media[1].attributes, ["rtpmap:0 PCMU/8000", "rtcp:48261"]);
 });
 test("PDML fields have real filter expressions and exact byte offsets", async () => {
   const d = await packetDetail(capture, 8);
@@ -147,6 +196,39 @@ test("PT settings validate ranges, codec allowlist, scope identity, duplicates a
     mappingFor({ ...mapping, rtp: { pt: 96, ssrc: mapping.ssrc } }, config)
       .codec,
     "PCMU",
+  );
+});
+test("Decode As rules validate TCP/UDP ports and become TShark dissector overrides", () => {
+  const config = validateConfig({
+    ports: [],
+    mappings: [],
+    decodeAs: [
+      { transport: "udp", port: 5060, protocol: "sip" },
+      { transport: "tcp", port: 8080, protocol: "http" },
+    ],
+  });
+  assert.deepEqual(config.decodeAs, [
+    { transport: "udp", port: 5060, protocol: "sip" },
+    { transport: "tcp", port: 8080, protocol: "http" },
+  ]);
+  const args = argsFor({
+    dir,
+    revision: 1,
+    config,
+  });
+  assert.ok(args.includes("udp.port==5060,sip"));
+  assert.ok(args.includes("tcp.port==8080,http"));
+  assert.throws(
+    () =>
+      validateConfig({
+        ports: [],
+        mappings: [],
+        decodeAs: [
+          { transport: "udp", port: 5060, protocol: "sip" },
+          { transport: "udp", port: 5060, protocol: "http" },
+        ],
+      }),
+    /相同传输协议和端口/,
   );
 });
 test("same PT in opposite RTP streams is isolated; mapping affects filters, fields, jitter and WAV", async () => {

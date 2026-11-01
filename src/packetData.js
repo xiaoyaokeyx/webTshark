@@ -3,6 +3,7 @@ const CLIENT = '192.168.1.108';
 const GATEWAY = '192.168.1.1';
 const API = '203.0.113.42';
 const METRICS = '198.51.100.24';
+const SIP_SERVER = '198.51.100.40';
 const encoder = new TextEncoder();
 const encode = (text) => Array.from(encoder.encode(text));
 const word = (n) => [(n >>> 8) & 255, n & 255];
@@ -35,6 +36,115 @@ function tlsPayload(size, seed, recordType = 23) {
   // Encrypted bytes are illustrative and are deliberately not decryptable TLS records.
   return [recordType, 3, 3, ...word(size - 5), ...Array.from({ length: size - 5 }, (_, i) => (i * 73 + seed * 31) % 256)];
 }
+
+const sipSdpOffer = [
+  'v=0',
+  'o=alice 1 1 IN IP4 192.168.1.108',
+  's=WebShark demo offer',
+  'c=IN IP4 192.168.1.108',
+  't=0 0',
+  'a=group:BUNDLE 0 1',
+  'a=msid-semantic: WMS atlas',
+  'm=audio 20000 RTP/AVP 0 96 97',
+  'c=IN IP4 192.168.1.108',
+  'a=sendrecv',
+  'a=rtpmap:0 PCMU/8000',
+  'a=rtpmap:96 AMR-WB/16000',
+  'a=fmtp:96 octet-align=1',
+  'a=rtpmap:97 AMR/8000',
+  'a=fmtp:97 octet-align=1',
+  'a=ptime:20',
+  'a=maxptime:60',
+  'm=video 20002 RTP/AVP 98 99',
+  'c=IN IP4 192.168.1.108',
+  'a=sendrecv',
+  'a=rtpmap:98 H264/90000',
+  'a=fmtp:98 packetization-mode=1;profile-level-id=42e01f',
+  'a=rtpmap:99 VP8/90000',
+  'a=rtcp-fb:98 nack pli',
+  'a=rtcp-fb:99 nack pli',
+].join('\r\n') + '\r\n';
+const sipSdpAnswer = [
+  'v=0',
+  'o=bob 2 2 IN IP4 198.51.100.40',
+  's=WebShark demo answer',
+  'c=IN IP4 198.51.100.40',
+  't=0 0',
+  'a=group:BUNDLE 0 1',
+  'a=msid-semantic: WMS atlas',
+  'm=audio 21000 RTP/AVP 0 96',
+  'c=IN IP4 198.51.100.40',
+  'a=sendrecv',
+  'a=rtpmap:0 PCMU/8000',
+  'a=rtpmap:96 AMR-WB/16000',
+  'a=fmtp:96 octet-align=1',
+  'a=ptime:30',
+  'm=video 21002 RTP/AVP 98',
+  'c=IN IP4 198.51.100.40',
+  'a=recvonly',
+  'a=rtpmap:98 H264/90000',
+  'a=fmtp:98 packetization-mode=1;profile-level-id=640c1f',
+  'a=rtcp-fb:98 nack pli',
+  'a=rtcp-fb:98 goog-remb',
+  'a=rtcp-mux',
+].join('\r\n') + '\r\n';
+const sipMessage = (startLine, headers, body = '') => `${startLine}\r\n${headers.join('\r\n')}\r\nContent-Length: ${encode(body).length}\r\n\r\n${body}`;
+const sipInvite = sipMessage('INVITE sip:bob@atlas.local SIP/2.0', [
+  'Via: SIP/2.0/UDP 192.168.1.108:5062;branch=z9hG4bK-7f4a',
+  'Max-Forwards: 70',
+  'From: <sip:alice@atlas.local>;tag=alice-001',
+  'To: <sip:bob@atlas.local>',
+  'Call-ID: call-7f4a@atlas.local',
+  'CSeq: 1 INVITE',
+  'Contact: <sip:alice@192.168.1.108:5062>',
+  'Content-Type: application/sdp',
+], sipSdpOffer);
+const sipTrying = sipMessage('SIP/2.0 100 Trying', [
+  'Via: SIP/2.0/UDP 192.168.1.108:5062;branch=z9hG4bK-7f4a',
+  'From: <sip:alice@atlas.local>;tag=alice-001',
+  'To: <sip:bob@atlas.local>',
+  'Call-ID: call-7f4a@atlas.local',
+  'CSeq: 1 INVITE',
+]);
+const sipRinging = sipMessage('SIP/2.0 180 Ringing', [
+  'Via: SIP/2.0/UDP 192.168.1.108:5062;branch=z9hG4bK-7f4a',
+  'From: <sip:alice@atlas.local>;tag=alice-001',
+  'To: <sip:bob@atlas.local>;tag=bob-002',
+  'Call-ID: call-7f4a@atlas.local',
+  'CSeq: 1 INVITE',
+]);
+const sipOk = sipMessage('SIP/2.0 200 OK', [
+  'Via: SIP/2.0/UDP 192.168.1.108:5062;branch=z9hG4bK-7f4a',
+  'From: <sip:alice@atlas.local>;tag=alice-001',
+  'To: <sip:bob@atlas.local>;tag=bob-002',
+  'Call-ID: call-7f4a@atlas.local',
+  'CSeq: 1 INVITE',
+  'Contact: <sip:bob@198.51.100.40:5060>',
+  'Content-Type: application/sdp',
+], sipSdpAnswer);
+const sipAck = sipMessage('ACK sip:bob@atlas.local SIP/2.0', [
+  'Via: SIP/2.0/UDP 192.168.1.108:5062;branch=z9hG4bK-7f4a-ack',
+  'Max-Forwards: 70',
+  'From: <sip:alice@atlas.local>;tag=alice-001',
+  'To: <sip:bob@atlas.local>;tag=bob-002',
+  'Call-ID: call-7f4a@atlas.local',
+  'CSeq: 1 ACK',
+]);
+const sipBye = sipMessage('BYE sip:bob@atlas.local SIP/2.0', [
+  'Via: SIP/2.0/UDP 192.168.1.108:5062;branch=z9hG4bK-7f4a-bye',
+  'Max-Forwards: 70',
+  'From: <sip:alice@atlas.local>;tag=alice-001',
+  'To: <sip:bob@atlas.local>;tag=bob-002',
+  'Call-ID: call-7f4a@atlas.local',
+  'CSeq: 2 BYE',
+]);
+const sipByeOk = sipMessage('SIP/2.0 200 OK', [
+  'Via: SIP/2.0/UDP 192.168.1.108:5062;branch=z9hG4bK-7f4a-bye',
+  'From: <sip:alice@atlas.local>;tag=alice-001',
+  'To: <sip:bob@atlas.local>;tag=bob-002',
+  'Call-ID: call-7f4a@atlas.local',
+  'CSeq: 2 BYE',
+]);
 
 const definitions = [
   { time: 0, protocol: 'ARP', source: CLIENT, destination: GATEWAY, info: 'Who has 192.168.1.1? Tell 192.168.1.108', arpReply: false },
@@ -85,6 +195,13 @@ const definitions = [
   { time: 1.035292, protocol: 'TCP', stream: 0, reverse: true, flags: 'FIN, ACK' },
   { time: 1.035451, protocol: 'TCP', stream: 0, flags: 'ACK' },
   { time: 1.542031, protocol: 'UDP', source: CLIENT, destination: '198.51.100.18', srcPort: 56701, dstPort: 5000, payloadBytes: encode('atlas:heartbeat:0003'), info: '56701 → 5000 Len=20' },
+  { time: 3.500000, protocol: 'SIP', source: CLIENT, destination: SIP_SERVER, srcPort: 5062, dstPort: 5060, payloadBytes: encode(sipInvite), info: 'INVITE sip:bob@atlas.local' },
+  { time: 3.501200, protocol: 'SIP', source: SIP_SERVER, destination: CLIENT, srcPort: 5060, dstPort: 5062, payloadBytes: encode(sipTrying), info: 'SIP/2.0 100 Trying' },
+  { time: 3.502400, protocol: 'SIP', source: SIP_SERVER, destination: CLIENT, srcPort: 5060, dstPort: 5062, payloadBytes: encode(sipRinging), info: 'SIP/2.0 180 Ringing' },
+  { time: 3.503800, protocol: 'SIP', source: SIP_SERVER, destination: CLIENT, srcPort: 5060, dstPort: 5062, payloadBytes: encode(sipOk), info: 'SIP/2.0 200 OK (SDP)' },
+  { time: 3.504700, protocol: 'SIP', source: CLIENT, destination: SIP_SERVER, srcPort: 5062, dstPort: 5060, payloadBytes: encode(sipAck), info: 'ACK sip:bob@atlas.local' },
+  { time: 3.800000, protocol: 'SIP', source: CLIENT, destination: SIP_SERVER, srcPort: 5062, dstPort: 5060, payloadBytes: encode(sipBye), info: 'BYE sip:bob@atlas.local' },
+  { time: 3.801200, protocol: 'SIP', source: SIP_SERVER, destination: CLIENT, srcPort: 5060, dstPort: 5062, payloadBytes: encode(sipByeOk), info: 'SIP/2.0 200 OK (BYE)' },
 ];
 
 function makeBytes(packet) {
@@ -124,7 +241,7 @@ function buildPackets() {
   const result = [];
   for (const [index, definition] of definitions.entries()) {
     const packet = { no: index + 1, srcPort: null, dstPort: null, stream: null, issue: null, flags: '', payload: '', payloadBytes: [], ...definition };
-    packet.transport = ['TCP', 'HTTP', 'TLSv1.3'].includes(packet.protocol) ? 'TCP' : ['UDP', 'DNS'].includes(packet.protocol) ? 'UDP' : packet.protocol;
+    packet.transport = ['TCP', 'HTTP', 'TLSv1.3'].includes(packet.protocol) ? 'TCP' : ['UDP', 'DNS', 'SIP'].includes(packet.protocol) ? 'UDP' : packet.protocol;
     if (packet.transport === 'TCP') {
       const reverse = Boolean(packet.reverse);
       const server = packet.stream === 0 ? API : METRICS;
@@ -147,7 +264,7 @@ function buildPackets() {
       packet.payloadBytes = dnsPayload(packet.dnsName, Boolean(packet.dnsAnswer), packet.transaction, packet.dnsAnswer);
       packet.info = `Standard query${packet.dnsAnswer ? ' response' : ''} 0x${packet.transaction.toString(16)} A ${packet.dnsName}${packet.dnsAnswer ? ` A ${packet.dnsAnswer}` : ''}`;
     }
-    if (packet.protocol === 'UDP') packet.info = `${packet.srcPort} → ${packet.dstPort} Len=${packet.payloadBytes.length}`;
+    if (packet.protocol === 'UDP' && !packet.info) packet.info = `${packet.srcPort} → ${packet.dstPort} Len=${packet.payloadBytes.length}`;
     packet.bytes = makeBytes(packet);
     packet.length = packet.bytes.length;
     result.push(packet);
@@ -196,7 +313,7 @@ function compileFilter(expression) {
   }
   if (text.startsWith('(') && text.endsWith(')')) return compileFilter(text.slice(1, -1));
   const simple = text.toLowerCase();
-  if (['tcp', 'udp', 'http', 'dns', 'tls', 'tlsv1.3', 'icmp', 'arp'].includes(simple)) {
+  if (['tcp', 'udp', 'http', 'dns', 'tls', 'tlsv1.3', 'sip', 'icmp', 'arp'].includes(simple)) {
     return (packet) => simple === 'tcp' || simple === 'udp'
       ? packet.transport.toLowerCase() === simple
       : packet.protocol.toLowerCase() === (simple === 'tls' ? 'tlsv1.3' : simple);

@@ -73,6 +73,17 @@ export const codecs = [
     dissector: "rtpevent",
   },
 ];
+export const decodeAsProtocols = [
+  { name: "rtp", label: "RTP（实时传输协议）" },
+  { name: "rtcp", label: "RTCP（RTP 控制协议）" },
+  { name: "sip", label: "SIP（会话初始化协议）" },
+  { name: "sdp", label: "SDP（会话描述协议）" },
+  { name: "http", label: "HTTP" },
+  { name: "mrcpv2", label: "MRCPv2" },
+  { name: "dns", label: "DNS" },
+  { name: "tls", label: "TLS" },
+  { name: "data", label: "Data（原始数据）" },
+];
 export function validateConfig(input = {}) {
   if (!Array.isArray(input.mappings) || input.mappings.length > 128)
     throw new Error("RTP 映射必须为数组，最多 128 条");
@@ -81,6 +92,26 @@ export function validateConfig(input = {}) {
   const ports = [...new Set(input.ports.map(Number))];
   if (ports.some((p) => !Number.isInteger(p) || p < 1 || p > 65535))
     throw new Error("UDP 端口范围为 1–65535");
+  const decodeAsInput = input.decodeAs == null ? [] : input.decodeAs;
+  if (!Array.isArray(decodeAsInput) || decodeAsInput.length > 128)
+    throw new Error("Decode As 规则必须为数组，最多 128 条");
+  const decodeKeys = new Set();
+  const decodeAs = decodeAsInput.map((rule) => {
+    const transport = String(rule.transport || "").toLowerCase(),
+      port = Number(rule.port),
+      protocol = String(rule.protocol || "").toLowerCase();
+    if (!["tcp", "udp"].includes(transport))
+      throw new Error("Decode As 仅支持 TCP 或 UDP");
+    if (!Number.isInteger(port) || port < 1 || port > 65535)
+      throw new Error("Decode As 端口范围为 1–65535");
+    if (!decodeAsProtocols.some((item) => item.name === protocol))
+      throw new Error("不支持的 Decode As 协议");
+    const key = `${transport}|${port}`;
+    if (decodeKeys.has(key))
+      throw new Error("相同传输协议和端口只能设置一条 Decode As 规则");
+    decodeKeys.add(key);
+    return { transport, port, protocol };
+  });
   const keys = new Set();
   const mappings = input.mappings.map((m) => {
     const pt = Number(m.pt),
@@ -149,7 +180,7 @@ export function validateConfig(input = {}) {
     keys.add(key);
     return out;
   });
-  return { ports, heuristic: input.heuristic === true, mappings };
+  return { ports, heuristic: input.heuristic === true, mappings, decodeAs };
 }
 export function mappingFor(packet, config) {
   const list = config?.mappings || [];
