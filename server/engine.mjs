@@ -1246,6 +1246,15 @@ export async function buildIndex(
   const fields = [...new Set([...baseFields, ...requestedFields])].filter(
     (f) => f.startsWith("_ws.col.") || fieldTypes.has(f),
   );
+  // Let TShark evaluate arbitrary display filters, but reuse already decoded
+  // records when the decoding configuration and requested fields are unchanged.
+  const sourceIndex = filter && !extraDecodeAs.length && capture.index &&
+    fields.every((field) => capture.index.fields?.includes(field))
+    ? capture.index : null;
+  const source = sourceIndex
+    ? createReadStream(sourceIndex.path, { encoding: "utf8" }) : null;
+  const sourceReader = source ? createInterface({ input: source, crlfDelay: Infinity }) : null;
+  const records = sourceReader?.[Symbol.asyncIterator]();
   try {
     await run(
       [
@@ -1257,14 +1266,31 @@ export async function buildIndex(
         "occurrence=f",
         "-E",
         "escape=y",
-        ...fields.flatMap((f) => ["-e", f]),
+        ...(sourceIndex ? ["-e", "frame.number"] : fields.flatMap((f) => ["-e", f])),
       ],
       {
         capture,
         timeout: Number(process.env.PARSE_TIMEOUT_MS) || 600000,
         onLine: async (line) => {
           if (!line.trim()) return;
-          const p = parsePacket(line, fields, capture.config);
+          let p;
+          if (records) {
+            const no = Number(line.trim());
+            if (!Number.isInteger(no) || no < 1) throw new Error("无效的过滤包号");
+            while (true) {
+              const next = await records.next();
+              if (next.done) throw new Error("过滤结果与原始索引不一致");
+              // The writer puts the frame number first. Skip nonmatching rows
+              // without parsing their potentially large protocol field objects.
+              const frame = /^\{"no":(\d+),/.exec(next.value);
+              if (frame && Number(frame[1]) < no) continue;
+              p = JSON.parse(next.value);
+              if (p.no >= no) break;
+            }
+            if (p.no !== no) throw new Error("过滤结果与原始索引不一致");
+          } else {
+            p = parsePacket(line, fields, capture.config);
+          }
           if (!p.no) return;
           updateSummary(summary, p);
           const record = JSON.stringify(p) + "\n";
@@ -1290,6 +1316,9 @@ export async function buildIndex(
     out.destroy();
     await rm(path, { force: true });
     throw e;
+  } finally {
+    sourceReader?.close();
+    source?.destroy();
   }
 }
 export async function getIndex(
@@ -1305,6 +1334,7 @@ export async function getIndex(
   }
   if (
     !filter &&
+    !extraDecodeAs.length &&
     requestedFields.every((field) => capture.index?.fields?.includes(field))
   )
     return capture.index;
@@ -1317,7 +1347,12 @@ export async function getIndex(
         .sort()
         .join(",")}${fieldKey}`
     : `${filter}${fieldKey}`;
-  if (capture.queries.has(queryKey)) return capture.queries.get(queryKey);
+  if (capture.queries.has(queryKey)) {
+    const cached = capture.queries.get(queryKey);
+    capture.queries.delete(queryKey);
+    capture.queries.set(queryKey, cached);
+    return cached;
+  }
   // Each query is a bounded disk index, rather than all packet objects held in browser or Node memory.
   if (capture.queries.size >= 4) {
     const [key, value] = capture.queries.entries().next().value;

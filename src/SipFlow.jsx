@@ -366,6 +366,7 @@ export default function SipFlow({
     [retry, setRetry] = useState(0);
   const [hidden, setHidden] = useState(new Set()),
     [search, setSearch] = useState("");
+  const [showChart, setShowChart] = useState(false);
   const [mode, setMode] = useState("merged"),
     [gap, setGap] = useState(2);
   const [expandedPacketNo, setExpandedPacketNo] = useState(null),
@@ -379,6 +380,8 @@ export default function SipFlow({
     setPackets([]);
     setProgress(0);
     setHidden(new Set());
+    setShowChart(false);
+    setExpandedPacketNo(null);
     const flowFilter = filter.trim() || "sip";
     (async () => {
       const load = (page) =>
@@ -535,9 +538,17 @@ export default function SipFlow({
               <span>
                 通话会话{" "}
                 <small>
-                  {selected.length} / {calls.length} 已显示
+                  {selected.length} / {calls.length} 已选择
                 </small>
               </span>
+              <button
+                className="voip-packets-button"
+                disabled={!selected.length}
+                onClick={() => { setExpandedPacketNo(null); setShowChart((value) => !value); }}
+              >
+                <GitBranch size={15} />
+                {showChart ? "收起时序图" : "时序图"}
+              </button>
               <label className="voip-search">
                 <Search size={14} />
                 <input
@@ -594,7 +605,6 @@ export default function SipFlow({
                       </td>
                       <td>
                         <div className="voip-call-identity">
-                          <i className="voip-color-dot" />
                           <strong>
                             会话 {String(call.index + 1).padStart(2, "0")}
                           </strong>
@@ -627,18 +637,20 @@ export default function SipFlow({
                       <td>
                         <button
                           className="voip-only"
-                          aria-label={`仅显示会话 ${call.index + 1}`}
-                          onClick={() =>
+                          aria-label={`会话 ${call.index + 1} 时序图`}
+                          onClick={() => {
+                            setShowChart(true);
+                            setExpandedPacketNo(null);
                             setHidden(
                               new Set(
                                 calls
                                   .filter((c) => c.key !== call.key)
                                   .map((c) => c.key),
                               ),
-                            )
-                          }
+                            );
+                          }}
                         >
-                          仅此会话
+                          时序图
                         </button>
                       </td>
                     </tr>
@@ -652,110 +664,76 @@ export default function SipFlow({
               </p>
             )}
           </div>
-          <div className="voip-controls">
-            <div
-              className="voip-view-toggle"
-              role="group"
-              aria-label="时序布局"
-            >
-              <button
-                aria-pressed={mode === "merged"}
-                onClick={() => setMode("merged")}
-              >
-                <GitBranch size={14} />
-                合并时序
-              </button>
-              <button
-                aria-pressed={mode === "grouped"}
-                onClick={() => setMode("grouped")}
-              >
-                <Layers3 size={14} />
-                按会话分组
-              </button>
-            </div>
-            <div className="voip-time-controls">
-              <label htmlFor="sip-time-format">
-                时间
-                <select
-                  id="sip-time-format"
-                  value={timeFormat}
-                  onChange={(e) => onTimeFormatChange(e.target.value)}
+          {showChart && (
+            <>
+              <div className="voip-controls">
+                <div
+                  className="voip-view-toggle"
+                  role="group"
+                  aria-label="时序布局"
                 >
-                  {timeOptions.map(([id, label]) => (
-                    <option key={id} value={id}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label htmlFor="sip-session-gap">
-                空闲分段
-                <select
-                  id="sip-session-gap"
-                  value={gap}
-                  onChange={(e) => setGap(Number(e.target.value))}
-                >
-                  <option value="0.5">&gt; 500 ms</option>
-                  <option value="1">&gt; 1 s</option>
-                  <option value="2">&gt; 2 s</option>
-                  <option value="5">&gt; 5 s</option>
-                </select>
-              </label>
-            </div>
-          </div>
-          <div className="voip-selected-legend" aria-label="已显示的会话">
-            <span>正在显示</span>
-            {selected.map((call) => (
-              <button
-                key={call.key}
-                className={`voip-call-${call.index % 6}`}
-                title={`${call.callId} · 点击隐藏`}
-                onClick={() => toggle(call.key)}
-              >
-                <i className="voip-color-dot" />
-                会话 {String(call.index + 1).padStart(2, "0")}
-                <span>
-                  {call.endpoints
-                    .map((ip) => endpointLetter(endpoints.indexOf(ip)))
-                    .join(" ↔ ")}
-                </span>
-              </button>
-            ))}
-          </div>
-          {!selected.length ? (
-            <div className="voip-state">
-              <Network size={24} />
-              <strong>选择会话以查看时序</strong>
-              <span>勾选上方会话，可将多路通话放在同一张图中。</span>
-              <button
-                onClick={() => {
-                  setHidden(new Set());
-                  setSearch("");
-                }}
-              >
-                显示全部会话
-              </button>
-            </div>
-          ) : mode === "merged" ? (
-            <FlowChart
-              calls={selected}
-              endpointOrder={endpoints}
-              timeFormat={timeFormat}
-              formatTime={formatTime}
-              gap={gap}
-              onPacket={handlePacketClick}
-              expandedPacketNo={expandedPacketNo}
-              packetDetail={packetDetail}
-              packetDetailLoading={packetDetailLoading}
-              packetDetailError={packetDetailError}
-              onCloseDetail={() => setExpandedPacketNo(null)}
-            />
-          ) : (
-            <div className="voip-grouped-charts">
-              {selected.map((call) => (
+                  <button
+                    aria-pressed={mode === "merged"}
+                    onClick={() => setMode("merged")}
+                  >
+                    <GitBranch size={14} />
+                    合并时序
+                  </button>
+                  <button
+                    aria-pressed={mode === "grouped"}
+                    onClick={() => setMode("grouped")}
+                  >
+                    <Layers3 size={14} />
+                    按会话分组
+                  </button>
+                </div>
+                <div className="voip-time-controls">
+                  <label htmlFor="sip-time-format">
+                    时间
+                    <select
+                      id="sip-time-format"
+                      value={timeFormat}
+                      onChange={(e) => onTimeFormatChange(e.target.value)}
+                    >
+                      {timeOptions.map(([id, label]) => (
+                        <option key={id} value={id}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label htmlFor="sip-session-gap">
+                    空闲分段
+                    <select
+                      id="sip-session-gap"
+                      value={gap}
+                      onChange={(e) => setGap(Number(e.target.value))}
+                    >
+                      <option value="0.5">&gt; 500 ms</option>
+                      <option value="1">&gt; 1 s</option>
+                      <option value="2">&gt; 2 s</option>
+                      <option value="5">&gt; 5 s</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              {!selected.length ? (
+                <div className="voip-state">
+                  <Network size={24} />
+                  <strong>选择会话以查看时序</strong>
+                  <span>勾选上方会话，可将多路通话放在同一张图中。</span>
+                  <button
+                    onClick={() => {
+                      setHidden(new Set());
+                      setSearch("");
+                    }}
+                  >
+                    显示全部会话
+                  </button>
+                </div>
+              ) : mode === "merged" ? (
                 <FlowChart
-                  key={call.key}
-                  calls={[call]}
+                  calls={selected}
                   endpointOrder={endpoints}
                   timeFormat={timeFormat}
                   formatTime={formatTime}
@@ -766,10 +744,29 @@ export default function SipFlow({
                   packetDetailLoading={packetDetailLoading}
                   packetDetailError={packetDetailError}
                   onCloseDetail={() => setExpandedPacketNo(null)}
-                  grouped
                 />
-              ))}
-            </div>
+              ) : (
+                <div className="voip-grouped-charts">
+                  {selected.map((call) => (
+                    <FlowChart
+                      key={call.key}
+                      calls={[call]}
+                      endpointOrder={endpoints}
+                      timeFormat={timeFormat}
+                      formatTime={formatTime}
+                      gap={gap}
+                      onPacket={handlePacketClick}
+                      expandedPacketNo={expandedPacketNo}
+                      packetDetail={packetDetail}
+                      packetDetailLoading={packetDetailLoading}
+                      packetDetailError={packetDetailError}
+                      onCloseDetail={() => setExpandedPacketNo(null)}
+                      grouped
+                    />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </>
       )}

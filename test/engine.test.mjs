@@ -81,6 +81,43 @@ test("real PCAP index uses bounded pages and keeps original frame numbers", asyn
     1,
   );
 });
+test("filtered index reuse matches full TShark extraction, including empty and compound filters", async () => {
+  for (const filter of ["tcp", "rtp", "sip || dns", "frame.number > 100 && udp", "frame.number == 999999"]) {
+    const reused = await buildIndex(capture, filter);
+    const extracted = await buildIndex({ ...capture, index: null }, filter);
+    assert.equal(reused.count, extracted.count, filter);
+    assert.deepEqual(reused.summary, extracted.summary, filter);
+    assert.deepEqual(
+      await pageFromIndex(reused, 0, 1000),
+      await pageFromIndex(extracted, 0, 1000),
+      filter,
+    );
+  }
+});
+test("query cache retains recently used filters when evicting entries", async () => {
+  const local = { ...capture, queries: new Map() };
+  const first = await getIndex(local, "tcp");
+  await getIndex(local, "udp");
+  await getIndex(local, "sip");
+  await getIndex(local, "dns");
+  assert.equal(await getIndex(local, "tcp"), first);
+  await getIndex(local, "arp");
+  assert.ok(local.queries.has("tcp"));
+  assert.ok(!local.queries.has("udp"));
+});
+test("new fields and extra Decode As use fresh extraction rather than the base index", async () => {
+  const local = {
+    ...capture,
+    index: { ...capture.index, path: join(dir, "must-not-read.jsonl") },
+    queries: new Map(),
+  };
+  const custom = await getIndex(local, "tcp", [], ["frame.cap_len"]);
+  assert.ok(custom.fields.includes("frame.cap_len"));
+  assert.ok((await pageFromIndex(custom))[0].fields["frame.cap_len"]);
+  const decoded = await getIndex(local, "", [{ transport: "udp", port: 20000, protocol: "rtp" }]);
+  assert.notEqual(decoded, local.index);
+  assert.equal(decoded.count, capture.index.count);
+});
 test("RTP waveform preserves packet timing metadata for playback alignment", async () => {
   const previousMappings = capture.config.mappings;
   capture.config.mappings = [{
