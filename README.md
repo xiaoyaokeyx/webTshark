@@ -1,5 +1,7 @@
 # WebShark · 离线抓包分析工作台
 
+0.3 增强版：多标签、任务中心、报文构造、协议诊断、PCAP 对比与报告见 [功能与验收说明](ENHANCEMENTS.md)。
+
 React 网页界面 + Node.js 服务 + 本机 TShark 解析引擎。上传 PCAP/PCAPNG/CAP 后进行离线分析，不提供实时抓包。目前已接入真实数据解析，但尚未覆盖 Wireshark 的全部功能。
 
 ## 已实现

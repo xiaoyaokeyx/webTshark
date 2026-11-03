@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { open, writeFile, readFile, mkdir, rm } from "node:fs/promises";
+import {
+  open,
+  writeFile,
+  readFile,
+  mkdir,
+  rm,
+  mkdtemp,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { once } from "node:events";
 import { join, dirname } from "node:path";
@@ -52,21 +60,32 @@ export async function run(
     });
     running.add(proc);
     capture?.processes?.add(proc);
+    if (capture?.paused && process.platform !== "win32") proc.kill("SIGSTOP");
     let stderr = "",
       stdout = "",
       size = 0,
       problem = null,
       done = false,
       reader;
-    const timer = setTimeout(() => {
-      problem = new Error("解析超时，请缩小抓包范围后重试");
-      proc.kill("SIGKILL");
-    }, timeout);
+    let remainingMs = timeout,
+      lastTick = Date.now();
+    const timer = setInterval(
+      () => {
+        const now = Date.now();
+        if (!capture?.paused) remainingMs -= now - lastTick;
+        lastTick = now;
+        if (remainingMs <= 0) {
+          problem = new Error("解析超时，请缩小抓包范围后重试");
+          proc.kill("SIGKILL");
+        }
+      },
+      Math.min(timeout, 1000),
+    );
     timer.unref();
     const finish = (err) => {
       if (done) return;
       done = true;
-      clearTimeout(timer);
+      clearInterval(timer);
       running.delete(proc);
       capture?.processes?.delete(proc);
       release();
@@ -128,6 +147,33 @@ let fieldNames = [];
 export let engineVersion = "";
 export async function initEngine() {
   engineVersion = (await run(["--version"])).split("\n")[0];
+  const probe = await mkdtemp(join(tmpdir(), "webtshark-probe-"));
+  try {
+    const pcap = Buffer.alloc(24);
+    pcap.writeUInt32LE(0xa1b2c3d4);
+    pcap.writeUInt16LE(2, 4);
+    pcap.writeUInt16LE(4, 6);
+    pcap.writeUInt32LE(262144, 16);
+    pcap.writeUInt32LE(1, 20);
+    await writeFile(join(probe, "empty.pcap"), pcap);
+    await writeFile(join(probe, "mapping.lua"), mappingLua({ mappings: [] }));
+    await run([
+      "-r",
+      join(probe, "empty.pcap"),
+      "-X",
+      `lua_script:${join(probe, "mapping.lua")}`,
+      "-T",
+      "fields",
+      "-e",
+      "webshark.rtp.codec",
+    ]);
+  } catch (error) {
+    throw new Error(
+      `TShark Lua 字段注册自检失败；请启用 Lua，并确认运行账户可加载生成脚本。${error.message}`,
+    );
+  } finally {
+    await rm(probe, { recursive: true, force: true });
+  }
   const fields = await run(["-G", "fields"], { maxBytes: 80 * 1024 * 1024 });
   for (const line of fields.split("\n")) {
     const cells = line.split("\t");
@@ -179,6 +225,7 @@ const baseFields = [
   "sip.to.tag",
   "sip.Via.branch",
   "sip.msg_body",
+  "sip.msg_hdr",
   "sip.CSeq.method",
   "sip.CSeq.seq",
   "sip.Status-Code",
@@ -195,6 +242,13 @@ const baseFields = [
   "mrcpv2.Method",
   "mrcpv2.Event",
   "mrcpv2.reqID",
+  "mrcpv2.status_code",
+  "mrcpv2.request_state",
+  "rtcp.senderssrc",
+  "rtcp.ssrc.identifier",
+  "rtcp.ssrc.fraction",
+  "rtcp.ssrc.cum_nr",
+  "rtcp.ssrc.jitter",
   "mrcpv2.Completion-Cause",
   "webshark.rtp.codec",
   "webshark.rtp.clock_rate",
@@ -217,10 +271,12 @@ export function argsFor(capture, extraDecodeAs = []) {
     `lua_script:${join(capture.dir, `rtp-${capture.revision}.lua`)}`,
     ...(capture.config.heuristic ? ["--enable-heuristic", "rtp_udp"] : []),
     ...capture.config.ports.flatMap((p) => ["-d", `udp.port==${p},rtp`]),
-    ...(capture.config.decodeAs || []).flatMap(({ transport, port, protocol }) => [
-      "-d",
-      `${transport}.port==${port},${protocol}`,
-    ]),
+    ...(capture.config.decodeAs || []).flatMap(
+      ({ transport, port, protocol }) => [
+        "-d",
+        `${transport}.port==${port},${protocol}`,
+      ],
+    ),
   ];
   const existing = new Set(
     (capture.config.decodeAs || []).map(
@@ -292,7 +348,9 @@ function splitFieldValues(value) {
 }
 
 function decodeHexField(value) {
-  const text = String(value || "").replace(/:/g, "").trim();
+  const text = String(value || "")
+    .replace(/:/g, "")
+    .trim();
   if (!text || !/^[0-9a-f]+$/i.test(text) || text.length % 2) return "";
   try {
     return Buffer.from(text, "hex").toString("utf8");
@@ -304,7 +362,10 @@ function decodeHexField(value) {
 export function parseSdpBody(value) {
   const body = decodeHexField(value);
   if (!body || !/\bm=/.test(body)) return null;
-  const lines = body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
   let sessionConnection = null;
   let current = null;
   const media = [];
@@ -318,7 +379,9 @@ export function parseSdpBody(value) {
       continue;
     }
     if (line.startsWith("m=")) {
-      const match = line.match(/^m=([^\s]+)\s+(\d+)(?:\/\d+)?\s+([^\s]+)(?:\s+(.*))?$/i);
+      const match = line.match(
+        /^m=([^\s]+)\s+(\d+)(?:\/\d+)?\s+([^\s]+)(?:\s+(.*))?$/i,
+      );
       if (!match) {
         current = null;
         continue;
@@ -334,7 +397,8 @@ export function parseSdpBody(value) {
       media.push(current);
       continue;
     }
-    if (line.startsWith("a=") && current) current.attributes.push(line.slice(2));
+    if (line.startsWith("a=") && current)
+      current.attributes.push(line.slice(2));
   }
   return { media, sessionConnection };
 }
@@ -343,7 +407,9 @@ function mediaAttributes(media) {
   const result = new Map();
   for (const attribute of media?.attributes || []) {
     const index = attribute.indexOf(":");
-    const name = (index < 0 ? attribute : attribute.slice(0, index)).toLowerCase();
+    const name = (
+      index < 0 ? attribute : attribute.slice(0, index)
+    ).toLowerCase();
     const value = index < 0 ? "" : attribute.slice(index + 1).trim();
     const values = result.get(name) || [];
     values.push(value);
@@ -445,7 +511,12 @@ async function scanRelationFields(
       row.callId = row["sip.Call-ID"] || "";
       row.fromTag = row["sip.from.tag"] || "";
       row.toTag = row["sip.to.tag"] || "";
-      row.transport = row["tcp.srcport"] !== "" ? "TCP" : row["udp.srcport"] !== "" ? "UDP" : "";
+      row.transport =
+        row["tcp.srcport"] !== ""
+          ? "TCP"
+          : row["udp.srcport"] !== ""
+            ? "UDP"
+            : "";
       row.stream = Number(
         row.transport === "TCP" ? row["tcp.stream"] : row["udp.stream"],
       );
@@ -484,21 +555,23 @@ function mediaChannelIds(media) {
 }
 
 function mediaResource(media) {
-  return unique(
-    media.flatMap((item) => item.attributes.get("resource") || []),
-  );
+  return unique(media.flatMap((item) => item.attributes.get("resource") || []));
 }
 
 function mediaPortSet(media, predicate) {
   return new Set(
-    media.filter((item) => item.port > 0 && predicate(item)).map((item) => item.port),
+    media
+      .filter((item) => item.port > 0 && predicate(item))
+      .map((item) => item.port),
   );
 }
 
 function mediaEndpointPairs(media) {
   return media
     .map((item) => {
-      const addresses = [item.source, item.destination, item.connection].filter(Boolean);
+      const addresses = [item.source, item.destination, item.connection].filter(
+        Boolean,
+      );
       return addresses.length > 1 ? addresses : null;
     })
     .filter(Boolean);
@@ -550,10 +623,7 @@ function storedRelationRow(record) {
 }
 
 async function scanStoredIndex(capture, predicate, project = (row) => row) {
-  if (
-    !capture.index?.path ||
-    !capture.index.fields?.includes("sip.msg_body")
-  )
+  if (!capture.index?.path || !capture.index.fields?.includes("sip.msg_body"))
     return null;
   const rows = [];
   const input = createReadStream(capture.index.path, { encoding: "utf8" });
@@ -586,7 +656,9 @@ function relationMatchFromRows({
   allCallIds,
 }) {
   const media = mediaFromSipRows(sipRows);
-  const audioMedia = media.filter((item) => item.type === "audio" && item.port > 0);
+  const audioMedia = media.filter(
+    (item) => item.type === "audio" && item.port > 0,
+  );
   const mrcpMedia = media.filter(
     (item) => item.type === "application" && /MRCPv2/i.test(item.proto),
   );
@@ -619,25 +691,31 @@ function relationMatchFromRows({
       row.time >= from &&
       row.time <= to &&
       rowMatchesMediaEndpoints(row, mrcpPairs) &&
-      [...mrcpPorts].some((port) => row.srcPort === port || row.dstPort === port),
+      [...mrcpPorts].some(
+        (port) => row.srcPort === port || row.dstPort === port,
+      ),
   );
   const channelStreams = unique(
     mrcpCandidates
-      .filter((row) => mrcpChannels.some((channel) => rowMrcpChannel(row).includes(channel)))
+      .filter((row) =>
+        mrcpChannels.some((channel) => rowMrcpChannel(row).includes(channel)),
+      )
       .map((row) => row.stream),
   ).filter((stream) => Number.isInteger(stream));
   const mrcpRows = channelStreams.length
     ? mrcpCandidates.filter((row) => channelStreams.includes(row.stream))
     : mrcpCandidates;
   const rtpPorts = new Set([...audioPorts, ...rtcpMuxPorts]);
-  const rtpRows = allRows.filter(
+  let rtpRows = allRows.filter(
     (row) =>
       row.transport === "UDP" &&
       Number.isFinite(row.time) &&
       row.time >= from &&
       row.time <= to &&
       rowMatchesMediaEndpoints(row, rtpPairs) &&
-      [...rtpPorts].some((port) => row.srcPort === port || row.dstPort === port),
+      [...rtpPorts].some(
+        (port) => row.srcPort === port || row.dstPort === port,
+      ),
   );
   const rtcpRows = allRows.filter(
     (row) =>
@@ -646,11 +724,34 @@ function relationMatchFromRows({
       row.time >= from &&
       row.time <= to &&
       rowMatchesMediaEndpoints(row, rtpPairs) &&
-      [...rtcpPorts].some((port) => row.srcPort === port || row.dstPort === port),
+      [...rtcpPorts].some(
+        (port) => row.srcPort === port || row.dstPort === port,
+      ),
   );
-  const mrcpStreams = unique(mrcpRows.map((row) => row.stream)).sort((a, b) => a - b);
-  const rtpStreams = unique(rtpRows.map((row) => row.stream)).sort((a, b) => a - b);
-  const rtcpStreams = unique(rtcpRows.map((row) => row.stream)).sort((a, b) => a - b);
+  // NAT or an SDP address copied from another interface can hide the endpoint
+  // match. Only a unique dialog may use port/time candidates; expose that fact.
+  const mediaAssociation = rtpRows.length
+    ? "sdp-endpoint"
+    : "port-time-candidate";
+  if (!rtpRows.length && allCallIds.length === 1)
+    rtpRows = allRows.filter(
+      (row) =>
+        row.transport === "UDP" &&
+        row.time >= from &&
+        row.time <= to &&
+        [...rtpPorts].some(
+          (port) => row.srcPort === port || row.dstPort === port,
+        ),
+    );
+  const mrcpStreams = unique(mrcpRows.map((row) => row.stream)).sort(
+    (a, b) => a - b,
+  );
+  const rtpStreams = unique(rtpRows.map((row) => row.stream)).sort(
+    (a, b) => a - b,
+  );
+  const rtcpStreams = unique(rtcpRows.map((row) => row.stream)).sort(
+    (a, b) => a - b,
+  );
   const sipFrames = unique(sipRows.map((row) => row.no)).sort((a, b) => a - b);
   const terms = [`sip.Call-ID == "${displayString(callId)}"`];
   for (const stream of mrcpStreams) terms.push(`tcp.stream == ${stream}`);
@@ -677,6 +778,7 @@ function relationMatchFromRows({
     rtcpPorts: [...rtcpPorts].sort((a, b) => a - b),
     mrcpPackets: mrcpRows.length,
     rtpPackets: rtpRows.length,
+    mediaAssociation,
     rtcpPackets: rtcpRows.length,
     start,
     end,
@@ -693,7 +795,8 @@ async function resolveSipMrcpPortFromIndex(capture, port) {
   );
   if (!sipRows) return null;
   const invites = sipRows.filter((row) => {
-    if (String(row["sip.Method"] || "").toUpperCase() !== "INVITE") return false;
+    if (String(row["sip.Method"] || "").toUpperCase() !== "INVITE")
+      return false;
     const media = parseSdpBody(row["sip.msg_body"]);
     return media?.media.some(
       (item) => item.type === "audio" && item.port === port,
@@ -705,7 +808,9 @@ async function resolveSipMrcpPortFromIndex(capture, port) {
   const specs = callIds.map((callId) => {
     const rows = sipRows.filter((row) => row.callId === callId);
     const media = mediaFromSipRows(rows);
-    const audioMedia = media.filter((item) => item.type === "audio" && item.port > 0);
+    const audioMedia = media.filter(
+      (item) => item.type === "audio" && item.port > 0,
+    );
     const mrcpMedia = media.filter(
       (item) => item.type === "application" && /MRCPv2/i.test(item.proto),
     );
@@ -743,10 +848,13 @@ async function resolveSipMrcpPortFromIndex(capture, port) {
       row.time >= from &&
       row.time <= to &&
       ((row.transport === "TCP" &&
-        [...allMrcpPorts].some((mediaPort) => row.srcPort === mediaPort || row.dstPort === mediaPort)) ||
+        [...allMrcpPorts].some(
+          (mediaPort) => row.srcPort === mediaPort || row.dstPort === mediaPort,
+        )) ||
         (row.transport === "UDP" &&
           [...new Set([...allRtpPorts, ...allRtcpPorts])].some(
-            (mediaPort) => row.srcPort === mediaPort || row.dstPort === mediaPort,
+            (mediaPort) =>
+              row.srcPort === mediaPort || row.dstPort === mediaPort,
           ))),
     (row) => ({
       time: row.time,
@@ -794,7 +902,10 @@ async function resolveSipMrcpPortFromIndex(capture, port) {
               protocol: "rtcp",
             })),
           ])
-          .map((rule) => [`${rule.transport}:${rule.port}:${rule.protocol}`, rule]),
+          .map((rule) => [
+            `${rule.transport}:${rule.port}:${rule.protocol}`,
+            rule,
+          ]),
       ).values(),
     ],
     expandedFilter,
@@ -809,8 +920,7 @@ async function resolveSipMrcpPortFromIndex(capture, port) {
 async function resolveSipMrcpPort(capture, port) {
   const stored = await resolveSipMrcpPortFromIndex(capture, port);
   if (stored) return stored;
-  const candidateFilter =
-    `sip.Method == "INVITE" && sdp.media.media == "audio" && sdp.media.port == ${port}`;
+  const candidateFilter = `sip.Method == "INVITE" && sdp.media.media == "audio" && sdp.media.port == ${port}`;
   const invites = await scanRelationFields(capture, candidateFilter);
   const callIds = unique(invites.map((row) => row.callId));
   if (!callIds.length)
@@ -823,7 +933,9 @@ async function resolveSipMrcpPort(capture, port) {
       `sip.Call-ID == "${displayString(callId)}"`,
     );
     const media = mediaFromSipRows(sipRows);
-    const audioMedia = media.filter((item) => item.type === "audio" && item.port > 0);
+    const audioMedia = media.filter(
+      (item) => item.type === "audio" && item.port > 0,
+    );
     const mrcpMedia = media.filter(
       (item) => item.type === "application" && /MRCPv2/i.test(item.proto),
     );
@@ -843,9 +955,15 @@ async function resolveSipMrcpPort(capture, port) {
         rtcpMuxPorts.add(item.port);
     }
     const mrcpPorts = mediaPortSet(mrcpMedia, () => true);
-    const selectedRows = sipRows.length ? sipRows : invites.filter((row) => row.callId === callId);
-    const start = Math.min(...selectedRows.map((row) => row.time).filter(Number.isFinite));
-    const end = Math.max(...selectedRows.map((row) => row.time).filter(Number.isFinite));
+    const selectedRows = sipRows.length
+      ? sipRows
+      : invites.filter((row) => row.callId === callId);
+    const start = Math.min(
+      ...selectedRows.map((row) => row.time).filter(Number.isFinite),
+    );
+    const end = Math.max(
+      ...selectedRows.map((row) => row.time).filter(Number.isFinite),
+    );
     const timeFilter = relationTimeFilter(start, end);
     const mrcpStreams = new Set();
     let mrcpRows = [];
@@ -861,15 +979,24 @@ async function resolveSipMrcpPort(capture, port) {
           protocol: "mrcpv2",
         })),
       );
-      mrcpRows = mrcpRows.filter((row) => rowMatchesMediaEndpoints(row, mrcpPairs));
+      mrcpRows = mrcpRows.filter((row) =>
+        rowMatchesMediaEndpoints(row, mrcpPairs),
+      );
       const channelStreams = unique(
         mrcpRows
-          .filter((row) => mrcpChannels.some((channel) => rowMrcpChannel(row).includes(channel)))
+          .filter((row) =>
+            mrcpChannels.some((channel) =>
+              rowMrcpChannel(row).includes(channel),
+            ),
+          )
           .map((row) => row.stream),
       ).filter((stream) => Number.isInteger(stream));
       if (channelStreams.length)
-        mrcpRows = mrcpRows.filter((row) => channelStreams.includes(row.stream));
-      for (const row of mrcpRows) if (Number.isInteger(row.stream)) mrcpStreams.add(row.stream);
+        mrcpRows = mrcpRows.filter((row) =>
+          channelStreams.includes(row.stream),
+        );
+      for (const row of mrcpRows)
+        if (Number.isInteger(row.stream)) mrcpStreams.add(row.stream);
     }
     const rtpPorts = new Set([...audioPorts, ...rtcpMuxPorts]);
     const rtpStreams = new Set();
@@ -886,8 +1013,11 @@ async function resolveSipMrcpPort(capture, port) {
           protocol: "rtp",
         })),
       );
-      rtpRows = rtpRows.filter((row) => rowMatchesMediaEndpoints(row, rtpPairs));
-      for (const row of rtpRows) if (Number.isInteger(row.stream)) rtpStreams.add(row.stream);
+      rtpRows = rtpRows.filter((row) =>
+        rowMatchesMediaEndpoints(row, rtpPairs),
+      );
+      for (const row of rtpRows)
+        if (Number.isInteger(row.stream)) rtpStreams.add(row.stream);
     }
     const rtcpStreams = new Set();
     let rtcpRows = [];
@@ -903,14 +1033,22 @@ async function resolveSipMrcpPort(capture, port) {
           protocol: "rtcp",
         })),
       );
-      rtcpRows = rtcpRows.filter((row) => rowMatchesMediaEndpoints(row, rtpPairs));
-      for (const row of rtcpRows) if (Number.isInteger(row.stream)) rtcpStreams.add(row.stream);
+      rtcpRows = rtcpRows.filter((row) =>
+        rowMatchesMediaEndpoints(row, rtpPairs),
+      );
+      for (const row of rtcpRows)
+        if (Number.isInteger(row.stream)) rtcpStreams.add(row.stream);
     }
-    const sipFrames = unique(sipRows.map((row) => row.no)).sort((a, b) => a - b);
+    const sipFrames = unique(sipRows.map((row) => row.no)).sort(
+      (a, b) => a - b,
+    );
     const terms = [`sip.Call-ID == "${displayString(callId)}"`];
-    for (const stream of [...mrcpStreams].sort((a, b) => a - b)) terms.push(`tcp.stream == ${stream}`);
-    for (const stream of [...rtpStreams].sort((a, b) => a - b)) terms.push(`udp.stream == ${stream}`);
-    for (const stream of [...rtcpStreams].sort((a, b) => a - b)) terms.push(`udp.stream == ${stream}`);
+    for (const stream of [...mrcpStreams].sort((a, b) => a - b))
+      terms.push(`tcp.stream == ${stream}`);
+    for (const stream of [...rtpStreams].sort((a, b) => a - b))
+      terms.push(`udp.stream == ${stream}`);
+    for (const stream of [...rtcpStreams].sort((a, b) => a - b))
+      terms.push(`udp.stream == ${stream}`);
     for (const mediaPort of [...mrcpPorts].sort((a, b) => a - b))
       if (!mrcpStreams.size) terms.push(`tcp.port == ${mediaPort}`);
     for (const mediaPort of [...rtpPorts].sort((a, b) => a - b))
@@ -939,7 +1077,8 @@ async function resolveSipMrcpPort(capture, port) {
     });
   }
   const expandedFilter = joinRelationFilters(matches);
-  if (!expandedFilter) throw new Error(`端口 ${port} 找到了 SIP，但没有可关联的 MRCP/RTP 流`);
+  if (!expandedFilter)
+    throw new Error(`端口 ${port} 找到了 SIP，但没有可关联的 MRCP/RTP 流`);
   return {
     type: "sip_mrcp",
     port,
@@ -964,7 +1103,10 @@ async function resolveSipMrcpPort(capture, port) {
               protocol: "rtcp",
             })),
           ])
-          .map((rule) => [`${rule.transport}:${rule.port}:${rule.protocol}`, rule]),
+          .map((rule) => [
+            `${rule.transport}:${rule.port}:${rule.protocol}`,
+            rule,
+          ]),
       ).values(),
     ],
     expandedFilter,
@@ -976,15 +1118,25 @@ async function resolveSipMrcpPort(capture, port) {
   };
 }
 
-export async function resolveFilter(capture, filter = "", requestedFields = []) {
+export async function resolveFilter(
+  capture,
+  filter = "",
+  requestedFields = [],
+) {
   return resolveFilterWithFields(capture, filter, requestedFields);
 }
 
-async function resolveFilterWithFields(capture, filter = "", requestedFields = []) {
-  const macros = [...String(filter).matchAll(sipMrcpMacroPattern)].map((match) => {
-    const expression = match[0];
-    return { expression, macro: parseSipMrcpFilter(expression) };
-  });
+async function resolveFilterWithFields(
+  capture,
+  filter = "",
+  requestedFields = [],
+) {
+  const macros = [...String(filter).matchAll(sipMrcpMacroPattern)].map(
+    (match) => {
+      const expression = match[0];
+      return { expression, macro: parseSipMrcpFilter(expression) };
+    },
+  );
   if (!macros.length)
     return {
       index: await getIndex(capture, filter, [], requestedFields),
@@ -1005,11 +1157,15 @@ async function resolveFilterWithFields(capture, filter = "", requestedFields = [
     relations.push(await relation);
   }
   const byExpression = new Map(
-    macros.map(({ expression }, index) => [expression.toLowerCase(), relations[index]]),
+    macros.map(({ expression }, index) => [
+      expression.toLowerCase(),
+      relations[index],
+    ]),
   );
   const expandedFilter = String(filter).replace(
     sipMrcpMacroPattern,
-    (expression) => `(${byExpression.get(expression.toLowerCase()).expandedFilter})`,
+    (expression) =>
+      `(${byExpression.get(expression.toLowerCase()).expandedFilter})`,
   );
   const mergedRelation =
     relations.length === 1
@@ -1018,12 +1174,20 @@ async function resolveFilterWithFields(capture, filter = "", requestedFields = [
           type: "sip_mrcp",
           ports: unique(relations.map((item) => item.port)),
           matches: relations.flatMap((item) => item.matches || []),
-          decodeAs: uniqueDecodeAs(relations.flatMap((item) => item.decodeAs || [])),
+          decodeAs: uniqueDecodeAs(
+            relations.flatMap((item) => item.decodeAs || []),
+          ),
           expandedFilter,
           ambiguous: relations.some((item) => item.ambiguous),
-          warning: relations.map((item) => item.warning).filter(Boolean).join("；") || null,
+          warning:
+            relations
+              .map((item) => item.warning)
+              .filter(Boolean)
+              .join("；") || null,
         };
-  const decodeAs = uniqueDecodeAs(relations.flatMap((item) => item.decodeAs || []));
+  const decodeAs = uniqueDecodeAs(
+    relations.flatMap((item) => item.decodeAs || []),
+  );
   return {
     index: await getIndex(capture, expandedFilter, decodeAs, requestedFields),
     relation: mergedRelation,
@@ -1295,6 +1459,13 @@ export async function buildIndex(
     .slice(0, 20);
   const path = join(capture.dir, `${hash}-${randomUUID()}.jsonl`);
   const offsets = [0];
+  const segments = [];
+  let segmentStart = 0,
+    segmentFirst = 1;
+  const segmentBytes = Math.max(
+    1024 * 1024,
+    Number(process.env.INDEX_SEGMENT_BYTES) || 50 * 1024 * 1024,
+  );
   let byteOffset = 0;
   const summary = createSummary();
   const out = createWriteStream(path, { flags: "w" });
@@ -1307,12 +1478,19 @@ export async function buildIndex(
   );
   // Let TShark evaluate arbitrary display filters, but reuse already decoded
   // records when the decoding configuration and requested fields are unchanged.
-  const sourceIndex = filter && !extraDecodeAs.length && capture.index &&
+  const sourceIndex =
+    filter &&
+    !extraDecodeAs.length &&
+    capture.index &&
     fields.every((field) => capture.index.fields?.includes(field))
-    ? capture.index : null;
+      ? capture.index
+      : null;
   const source = sourceIndex
-    ? createReadStream(sourceIndex.path, { encoding: "utf8" }) : null;
-  const sourceReader = source ? createInterface({ input: source, crlfDelay: Infinity }) : null;
+    ? createReadStream(sourceIndex.path, { encoding: "utf8" })
+    : null;
+  const sourceReader = source
+    ? createInterface({ input: source, crlfDelay: Infinity })
+    : null;
   const records = sourceReader?.[Symbol.asyncIterator]();
   try {
     await run(
@@ -1325,7 +1503,9 @@ export async function buildIndex(
         "occurrence=f",
         "-E",
         "escape=y",
-        ...(sourceIndex ? ["-e", "frame.number"] : fields.flatMap((f) => ["-e", f])),
+        ...(sourceIndex
+          ? ["-e", "frame.number"]
+          : fields.flatMap((f) => ["-e", f])),
       ],
       {
         capture,
@@ -1335,7 +1515,8 @@ export async function buildIndex(
           let p;
           if (records) {
             const no = Number(line.trim());
-            if (!Number.isInteger(no) || no < 1) throw new Error("无效的过滤包号");
+            if (!Number.isInteger(no) || no < 1)
+              throw new Error("无效的过滤包号");
             while (true) {
               const next = await records.next();
               if (next.done) throw new Error("过滤结果与原始索引不一致");
@@ -1358,11 +1539,45 @@ export async function buildIndex(
           byteOffset += Buffer.byteLength(record);
           if (summary.count % 100 === 0) offsets.push(byteOffset);
           if (progress) capture.processed = summary.count;
+          if (progress && byteOffset - segmentStart >= segmentBytes) {
+            await new Promise((resolve, reject) =>
+              out.write("", (error) => (error ? reject(error) : resolve())),
+            );
+            segments.push({
+              first: segmentFirst,
+              last: p.no,
+              start: segmentStart,
+              end: byteOffset,
+              status: "ready",
+            });
+            segmentStart = byteOffset;
+            segmentFirst = p.no + 1;
+            capture.segments = [...segments];
+            capture.partialIndex = {
+              path,
+              offsets: [...offsets],
+              count: summary.count,
+              bytes: byteOffset,
+              fields,
+            };
+          }
         },
       },
     );
     out.end();
     await once(out, "finish");
+    if (progress) {
+      if (byteOffset > segmentStart)
+        segments.push({
+          first: segmentFirst,
+          last: capture.processed,
+          start: segmentStart,
+          end: byteOffset,
+          status: "ready",
+        });
+      capture.segments = segments;
+      capture.partialIndex = null;
+    }
     return {
       path,
       offsets,
@@ -1402,7 +1617,9 @@ export async function getIndex(
     : "";
   const queryKey = extraDecodeAs.length
     ? `${filter}\n${extraDecodeAs
-        .map(({ transport, port, protocol }) => `${transport}:${port}:${protocol}`)
+        .map(
+          ({ transport, port, protocol }) => `${transport}:${port}:${protocol}`,
+        )
         .sort()
         .join(",")}${fieldKey}`
     : `${filter}${fieldKey}`;
@@ -1418,23 +1635,27 @@ export async function getIndex(
     capture.queries.delete(key);
     Promise.resolve(value)
       .then((i) => {
-        const timer = setTimeout(
-          () => {
-            rm(i.path, { force: true }).catch(() => {});
-            for (const sorted of i.sorted?.values?.() || [])
-              Promise.resolve(sorted)
-                .then((item) => rm(item.path, { force: true }))
-                .catch(() => {});
-          },
-          60000,
-        );
+        const timer = setTimeout(() => {
+          rm(i.path, { force: true }).catch(() => {});
+          for (const sorted of i.sorted?.values?.() || [])
+            Promise.resolve(sorted)
+              .then((item) => rm(item.path, { force: true }))
+              .catch(() => {});
+        }, 60000);
         timer.unref();
       })
       .catch(() => {});
   }
   const snapshot = { ...capture };
-  const promise = buildIndex(snapshot, filter, false, extraDecodeAs, requestedFields).catch((e) => {
-    if (capture.queries.get(queryKey) === promise) capture.queries.delete(queryKey);
+  const promise = buildIndex(
+    snapshot,
+    filter,
+    false,
+    extraDecodeAs,
+    requestedFields,
+  ).catch((e) => {
+    if (capture.queries.get(queryKey) === promise)
+      capture.queries.delete(queryKey);
     throw e;
   });
   capture.queries.set(queryKey, promise);
@@ -1449,12 +1670,18 @@ function sortFieldValue(record, field) {
   if (field === "_ws.col.Protocol") return record.protocol;
   if (field === "frame.len") return record.length;
   if (field === "_ws.col.Info") return record.info;
-  if (field === "tcp.srcport") return record.transport === "TCP" ? record.srcPort : null;
-  if (field === "tcp.dstport") return record.transport === "TCP" ? record.dstPort : null;
-  if (field === "udp.srcport") return record.transport === "UDP" ? record.srcPort : null;
-  if (field === "udp.dstport") return record.transport === "UDP" ? record.dstPort : null;
-  if (field === "tcp.stream") return record.transport === "TCP" ? record.stream : null;
-  if (field === "udp.stream") return record.transport === "UDP" ? record.stream : null;
+  if (field === "tcp.srcport")
+    return record.transport === "TCP" ? record.srcPort : null;
+  if (field === "tcp.dstport")
+    return record.transport === "TCP" ? record.dstPort : null;
+  if (field === "udp.srcport")
+    return record.transport === "UDP" ? record.srcPort : null;
+  if (field === "udp.dstport")
+    return record.transport === "UDP" ? record.dstPort : null;
+  if (field === "tcp.stream")
+    return record.transport === "TCP" ? record.stream : null;
+  if (field === "udp.stream")
+    return record.transport === "UDP" ? record.stream : null;
   if (field === "rtp.p_type") return record.rtp?.pt ?? null;
   if (field === "rtp.ssrc") return record.rtp?.ssrc ?? null;
   if (field === "rtp.seq") return record.rtp?.seq ?? null;
@@ -1472,7 +1699,8 @@ function compareSortEntries(left, right, direction) {
   const aNumber = Number(a),
     bNumber = Number(b);
   let result;
-  if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) result = aNumber - bNumber;
+  if (Number.isFinite(aNumber) && Number.isFinite(bNumber))
+    result = aNumber - bNumber;
   else
     result = String(a).localeCompare(String(b), "zh-CN", {
       numeric: true,
@@ -1493,7 +1721,10 @@ async function buildSortedIndex(index, field, direction) {
     if (!chunk.length) return;
     chunk.sort((a, b) => compareSortEntries(a, b, direction));
     const path = join(dirname(index.path), `.sort-${randomUUID()}.jsonl`);
-    await writeFile(path, chunk.map((item) => JSON.stringify(item.record)).join("\n") + "\n");
+    await writeFile(
+      path,
+      chunk.map((item) => JSON.stringify(item.record)).join("\n") + "\n",
+    );
     chunks.push(path);
     chunk = [];
   };
@@ -1519,7 +1750,10 @@ async function buildSortedIndex(index, field, direction) {
   try {
     for (const path of chunks) {
       const stream = createReadStream(path, { encoding: "utf8" });
-      const lineReader = createInterface({ input: stream, crlfDelay: Infinity });
+      const lineReader = createInterface({
+        input: stream,
+        crlfDelay: Infinity,
+      });
       const iterator = lineReader[Symbol.asyncIterator]();
       iterators.push({ stream, lineReader, iterator });
       const next = await iterator.next();
@@ -1532,12 +1766,18 @@ async function buildSortedIndex(index, field, direction) {
       let winner = -1;
       for (let i = 0; i < current.length; i++) {
         if (!current[i]) continue;
-        const candidate = { record: current[i], value: sortFieldValue(current[i], field) };
+        const candidate = {
+          record: current[i],
+          value: sortFieldValue(current[i], field),
+        };
         if (
           winner < 0 ||
           compareSortEntries(
             candidate,
-            { record: current[winner], value: sortFieldValue(current[winner], field) },
+            {
+              record: current[winner],
+              value: sortFieldValue(current[winner], field),
+            },
             direction,
           ) < 0
         )
@@ -1584,7 +1824,12 @@ async function sortedIndexFor(index, field, direction) {
   return index.sorted.get(key);
 }
 
-export async function pageFromIndex(index, page = 0, pageSize = 100, sort = null) {
+export async function pageFromIndex(
+  index,
+  page = 0,
+  pageSize = 100,
+  sort = null,
+) {
   if (sort?.field) {
     const sorted = await sortedIndexFor(
       index,
@@ -1729,11 +1974,11 @@ function jsonRawMeta(value) {
 function jsonFieldLabel(name, value) {
   const text = String(value ?? "");
   if (!text) return name || "字段";
-  if (
-    /(?:^|\.)(?:request|response|Request-Line|Status-Line)$/.test(name)
-  )
+  if (/(?:^|\.)(?:request|response|Request-Line|Status-Line)$/.test(name))
     return text;
-  const shortName = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : name;
+  const shortName = name.includes(".")
+    ? name.slice(name.lastIndexOf(".") + 1)
+    : name;
   return `${shortName}: ${text}`;
 }
 function jsonFieldNodes(container, bytes, depth = 0, virtual = false) {
@@ -1806,13 +2051,15 @@ function jsonLayerLabel(name, fields, no, bytes) {
     return `Transmission Control Protocol${srcPort ? `, Src Port: ${srcPort}` : ""}${dstPort ? `, Dst Port: ${dstPort}` : ""}`;
   if (name === "udp")
     return `User Datagram Protocol${srcPort ? `, Src Port: ${srcPort}` : ""}${dstPort ? `, Dst Port: ${dstPort}` : ""}`;
-  return {
-    http: "Hypertext Transfer Protocol",
-    sip: "Session Initiation Protocol",
-    sdp: "Session Description Protocol",
-    rtp: "Real-time Transport Protocol",
-    data: `Data (${bytes.length} bytes)`,
-  }[name] || name;
+  return (
+    {
+      http: "Hypertext Transfer Protocol",
+      sip: "Session Initiation Protocol",
+      sdp: "Session Description Protocol",
+      rtp: "Real-time Transport Protocol",
+      data: `Data (${bytes.length} bytes)`,
+    }[name] || name
+  );
 }
 async function packetDetailFromJson(capture, no, source = null) {
   const frameNo = source ? 1 : no;
@@ -1827,9 +2074,7 @@ async function packetDetailFromJson(capture, no, source = null) {
   const output = await run(args, { capture, maxBytes: 32 * 1024 * 1024 }),
     packet = JSON.parse(output)[0]?._source,
     sourceLayers = packet?.layers || {},
-    bytes = Array.from(
-      Buffer.from(sourceLayers.frame_raw?.[0] || "", "hex"),
-    );
+    bytes = Array.from(Buffer.from(sourceLayers.frame_raw?.[0] || "", "hex"));
   if (!bytes.length || !Object.keys(sourceLayers).length)
     throw new Error("TShark 未返回数据包详情");
   const layers = Object.entries(sourceLayers)
@@ -1932,9 +2177,10 @@ async function packetDetailDecoder(capture, no) {
   // JSON output is faster and contains raw bytes, but TShark's JSON object
   // shape collapses repeated SDP fields and can omit custom Opus dissector
   // fields. Keep PDML for those protocol cases so the detail tree stays exact.
-  const decoder = sipPacket || needsNativeDissector
-    ? packetDetailFromPdml
-    : packetDetailFromJson;
+  const decoder =
+    sipPacket || needsNativeDissector
+      ? packetDetailFromPdml
+      : packetDetailFromJson;
   if (!canIsolate) return decoder(capture, no);
   return withSinglePacketPcap(capture, no, (source) =>
     decoder(capture, no, source),
@@ -2102,7 +2348,9 @@ export async function waveformFor(capture, streamIndex, maxPoints = 2400) {
         const [no, time, epoch, seq, rawTimestamp, hex] = line.split("\t");
         if (!hex) return;
         const payload = Buffer.from(hex.replaceAll(":", ""), "hex");
-        const samples = [...payload].map((byte) => decodeG711(byte, mapping.codec));
+        const samples = [...payload].map((byte) =>
+          decodeG711(byte, mapping.codec),
+        );
         if (!samples.length) return;
         const min = Math.min(...samples);
         const max = Math.max(...samples);
@@ -2138,11 +2386,16 @@ export async function waveformFor(capture, streamIndex, maxPoints = 2400) {
   );
   const sequenceResult = finishSequenceTracker(sequenceTracker);
   for (let index = 0; index < frames.length; index += 1)
-    frames[index].lostBefore = sequenceResult.observations[index]?.lostBefore || 0;
+    frames[index].lostBefore =
+      sequenceResult.observations[index]?.lostBefore || 0;
   for (const frame of frames) delete frame.sequenceObservation;
-  const firstTimestamp = frames.find((frame) => Number.isFinite(frame.timestamp))?.timestamp;
-  const firstTime = frames.find((frame) => Number.isFinite(frame.time))?.time ?? 0;
-  const firstEpoch = frames.find((frame) => Number.isFinite(frame.epoch))?.epoch ?? null;
+  const firstTimestamp = frames.find((frame) =>
+    Number.isFinite(frame.timestamp),
+  )?.timestamp;
+  const firstTime =
+    frames.find((frame) => Number.isFinite(frame.time))?.time ?? 0;
+  const firstEpoch =
+    frames.find((frame) => Number.isFinite(frame.epoch))?.epoch ?? null;
   for (const frame of frames) {
     frame.offset =
       Number.isFinite(firstTimestamp) && Number.isFinite(frame.timestamp)
@@ -2172,9 +2425,7 @@ export async function waveformFor(capture, streamIndex, maxPoints = 2400) {
     const end = Math.min(frames.length, Math.floor((index + 1) * step));
     const bucket = frames.slice(start, Math.max(start + 1, end));
     packets.push(
-      bucket.reduce((best, frame) =>
-        frame.level > best.level ? frame : best,
-      ),
+      bucket.reduce((best, frame) => (frame.level > best.level ? frame : best)),
     );
   }
   return {

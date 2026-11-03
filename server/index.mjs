@@ -31,6 +31,13 @@ import {
 } from "./engine.mjs";
 import { validateConfig, codecs } from "./rtp.mjs";
 import { buildDemoPcap } from "./fixtures.mjs";
+import { buildCapture } from "../src/compose.js";
+import {
+  diagnose,
+  reportHtml,
+  compareIndexes,
+  indexRecords,
+} from "./diagnostics.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 function flagValue(name) {
   const args = process.argv.slice(2);
@@ -41,8 +48,7 @@ function flagValue(name) {
 }
 const listenHost =
   flagValue("--host") || flagValue("--bind") || process.env.HOST || "0.0.0.0";
-const listenPort =
-  Number(flagValue("--port") || process.env.PORT) || 3001;
+const listenPort = Number(flagValue("--port") || process.env.PORT) || 3001;
 const dataRoot = resolve(process.env.DATA_DIR || join(root, ".webshark"));
 const DEMO_VERSION = 3;
 await mkdir(dataRoot, { recursive: true, mode: 0o700 });
@@ -63,7 +69,10 @@ function snapshot(c) {
     summary: c.status === "ready" ? c.index?.summary : null,
     created: c.created,
     demo: c.demo,
+    demoPacketCount: c.demoPacketCount || null,
     demoVersion: c.demoVersion || null,
+    logs: c.logs || [],
+    segments: c.segments || [],
   };
 }
 async function save(c) {
@@ -77,7 +86,6 @@ for (const name of await readdir(dataRoot)) {
     const stored = JSON.parse(
       await readFile(join(dataRoot, name, "manifest.json"), "utf8"),
     );
-    if (stored.status !== "ready") continue;
     const c = {
       ...stored,
       dir: join(dataRoot, name),
@@ -86,7 +94,11 @@ for (const name of await readdir(dataRoot)) {
       processes: new Set(),
       cancelled: false,
     };
-    await stat(c.index.path);
+    if (c.index) await stat(c.index.path);
+    if (["indexing", "queued", "paused", "uploading"].includes(c.status)) {
+      c.status = "cancelled";
+      c.error = "服务重启，任务已停止；可重试。";
+    }
     captures.set(c.id, c);
   } catch {
     /* An incomplete upload is not an analysis session. */
@@ -104,12 +116,58 @@ function getCapture(id, ready = true) {
     });
   return c;
 }
+const pendingJobs = [];
+let jobCount = 0;
+const jobLimit = Math.max(
+  1,
+  Math.min(3, Number(process.env.JOB_CONCURRENCY) || 2),
+);
+function log(c, message) {
+  c.logs = [
+    ...(c.logs || []),
+    { time: new Date().toISOString(), message },
+  ].slice(-100);
+}
+function schedule(c, config = c.config) {
+  if (["indexing", "queued", "paused"].includes(c.status) || c.jobRunning)
+    throw Object.assign(new Error("任务已在队列中"), { status: 409 });
+  c.cancelled = false;
+  c.paused = false;
+  c.status = "queued";
+  c.error = null;
+  log(c, "任务排队");
+  const token = randomUUID();
+  c.jobToken = token;
+  pendingJobs.push({ c, config, token });
+  void save(c).catch(() => {});
+  drainJobs();
+}
+function drainJobs() {
+  while (jobCount < jobLimit && pendingJobs.length) {
+    const pos = pendingJobs.findIndex(
+      (job) => !job.c.paused || job.c.cancelled,
+    );
+    if (pos < 0) break;
+    const { c, config, token } = pendingJobs.splice(pos, 1)[0];
+    if (c.cancelled || c.jobToken !== token) continue;
+    jobCount++;
+    c.jobRunning = true;
+    void analyze(c, config).finally(() => {
+      c.jobRunning = false;
+      jobCount--;
+      drainJobs();
+    });
+  }
+}
 async function analyze(c, config = c.config) {
   const previous = { config: c.config, index: c.index, revision: c.revision };
   c.status = "indexing";
+  log(c, "开始解析：保留完整 TCP/SIP 重组上下文，流式写入分段索引");
   c.error = null;
   c.cancelled = false;
   c.processed = 0;
+  c.segments = [];
+  c.partialIndex = null;
   c.config = config;
   c.revision++;
   c.queries.clear();
@@ -119,6 +177,7 @@ async function analyze(c, config = c.config) {
     const index = await buildIndex(c, "", true);
     c.index = index;
     c.status = "ready";
+    log(c, `解析完成：${index.count} 包`);
     await save(c);
   } catch (e) {
     if (previous.index && !c.cancelled) {
@@ -130,6 +189,8 @@ async function analyze(c, config = c.config) {
       c.error = e.message;
     }
     await save(c).catch(() => {});
+    log(c, `任务停止：${c.error}`);
+    c.partialIndex = null;
   }
 }
 async function newCapture(name, demo = false) {
@@ -139,10 +200,10 @@ async function newCapture(name, demo = false) {
     });
   if (
     [...captures.values()].filter((c) =>
-      ["uploading", "indexing"].includes(c.status),
-    ).length >= 2
+      ["uploading", "indexing", "queued", "paused"].includes(c.status),
+    ).length >= 10
   )
-    throw Object.assign(new Error("已有 2 个导入任务，请稍后重试"), {
+    throw Object.assign(new Error("已有 10 个导入任务，请稍后重试"), {
       status: 429,
     });
   const id = randomUUID(),
@@ -190,15 +251,16 @@ async function readJson(req) {
 }
 function requestGuard(req) {
   const host = req.headers.host || "";
-  const allowed = (process.env.ALLOWED_HOSTS
-    ? process.env.ALLOWED_HOSTS.split(",")
-    : [
-        "127.0.0.1",
-        "localhost",
-        "[::1]",
-        listenHost,
-        ...(listenHost === "0.0.0.0" || listenHost === "::" ? ["*"] : []),
-      ]
+  const allowed = (
+    process.env.ALLOWED_HOSTS
+      ? process.env.ALLOWED_HOSTS.split(",")
+      : [
+          "127.0.0.1",
+          "localhost",
+          "[::1]",
+          listenHost,
+          ...(listenHost === "0.0.0.0" || listenHost === "::" ? ["*"] : []),
+        ]
   )
     .map((value) => value.trim())
     .filter(Boolean);
@@ -217,8 +279,10 @@ function requestGuard(req) {
     const originAllowed =
       allowed.includes("*") || allowed.includes(originHostname);
     const development =
-      originAllowed &&
-      ["5173", "5174"].includes(origin.port);
+      (originAllowed && ["5173", "5174"].includes(origin.port)) ||
+      (process.env.WEBSHARK_DEV_ORIGINS || "")
+        .split(",")
+        .includes(origin.origin);
     if (!same && !development)
       throw Object.assign(new Error("不允许的跨站请求"), { status: 403 });
   }
@@ -251,8 +315,48 @@ const server = http.createServer(async (req, res) => {
             .sort((a, b) => b.created.localeCompare(a.created))
             .map(snapshot),
         );
+      if (url.pathname === "/api/tasks" && method === "GET")
+        return json(res, {
+          concurrency: jobLimit,
+          active: jobCount,
+          tasks: [...captures.values()].map(snapshot),
+        });
+      if (url.pathname === "/api/compose" && method === "POST") {
+        const data = buildCapture(await readJson(req));
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.tcpdump.pcap",
+          "Content-Disposition": 'attachment; filename="synthetic.pcap"',
+        });
+        return res.end(data);
+      }
+      if (url.pathname === "/api/compare" && method === "POST") {
+        const body = await readJson(req),
+          a = getCapture(body.a),
+          b = getCapture(body.b);
+        return json(res, await compareIndexes(a.index, b.index, body));
+      }
       if (url.pathname === "/api/demo" && method === "POST") {
         requireEngine();
+        const rawPacketCount = url.searchParams.get("count");
+        if (rawPacketCount !== null) {
+          const packetCount = Number(rawPacketCount);
+          if (
+            !Number.isInteger(packetCount) ||
+            packetCount < 1 ||
+            packetCount > 10000
+          )
+            throw new Error("count 必须是 1 到 10000 之间的整数");
+          const c = await newCapture(
+            `webshark-${packetCount}-packet.pcap`,
+            true,
+          );
+          const data = buildCapture({ count: packetCount });
+          c.demoPacketCount = packetCount;
+          c.size = data.length;
+          await writeFile(join(c.dir, "capture.pcap"), data);
+          schedule(c);
+          return json(res, snapshot(c), 202);
+        }
         const existing = [...captures.values()].find(
           (c) => c.demo && c.status === "ready",
         );
@@ -261,7 +365,7 @@ const server = http.createServer(async (req, res) => {
         if (existing) {
           const data = buildDemoPcap();
           existing.demoVersion = DEMO_VERSION;
-          existing.status = "indexing";
+          existing.status = "ready";
           existing.error = null;
           existing.processed = 0;
           existing.config = {
@@ -273,7 +377,7 @@ const server = http.createServer(async (req, res) => {
           existing.revision = (existing.revision || 0) + 1;
           existing.size = data.length;
           await writeFile(join(existing.dir, "capture.pcap"), data);
-          void analyze(existing);
+          schedule(existing);
           return json(res, snapshot(existing), 202);
         }
         const c = await newCapture("webshark-demo.pcap", true);
@@ -281,7 +385,7 @@ const server = http.createServer(async (req, res) => {
         c.size = data.length;
         c.config.ports = [20000];
         await writeFile(join(c.dir, "capture.pcap"), data);
-        void analyze(c);
+        schedule(c);
         return json(res, snapshot(c), 202);
       }
       if (url.pathname === "/api/captures" && method === "POST") {
@@ -314,7 +418,7 @@ const server = http.createServer(async (req, res) => {
             createWriteStream(join(c.dir, "capture.pcap"), { mode: 0o600 }),
           );
           if (size < 24) throw new Error("文件过短，不是有效抓包");
-          void analyze(c);
+          schedule(c);
           return json(res, snapshot(c), 202);
         } catch (e) {
           captures.delete(c.id);
@@ -326,6 +430,43 @@ const server = http.createServer(async (req, res) => {
         const c = getCapture(parts[2], false);
         const action = parts[3];
         if (!action && method === "GET") return json(res, snapshot(c));
+        if (action === "retry" && method === "POST") {
+          requireEngine();
+          schedule(c);
+          return json(res, snapshot(c), 202);
+        }
+        if (["pause", "resume"].includes(action) && method === "POST") {
+          if (process.platform === "win32")
+            throw new Error("此系统不支持暂停解析进程，可取消后重试");
+          if (action === "pause") {
+            if (!["queued", "indexing"].includes(c.status))
+              throw new Error("当前任务不能暂停");
+            c.paused = true;
+            c.status = "paused";
+            for (const proc of c.processes) proc.kill("SIGSTOP");
+            log(c, "用户暂停任务");
+          } else {
+            if (c.status !== "paused") throw new Error("当前任务未暂停");
+            c.paused = false;
+            c.status = c.jobRunning ? "indexing" : "queued";
+            for (const proc of c.processes) proc.kill("SIGCONT");
+            log(c, "用户继续任务");
+            drainJobs();
+          }
+          await save(c);
+          return json(res, snapshot(c));
+        }
+        if (action === "progress-packets" && method === "GET") {
+          const partial = c.partialIndex || c.index;
+          if (!partial)
+            return json(res, { packets: [], total: 0, partial: true });
+          const page = Math.max(0, Number(url.searchParams.get("page")) || 0);
+          return json(res, {
+            packets: await pageFromIndex(partial, page, 100),
+            total: partial.count,
+            partial: true,
+          });
+        }
         if (!action && method === "DELETE") {
           c.cancelled = true;
           for (const p of c.processes) p.kill("SIGKILL");
@@ -337,13 +478,58 @@ const server = http.createServer(async (req, res) => {
           c.cancelled = true;
           for (const p of c.processes) p.kill("SIGKILL");
           c.status = "cancelled";
+          log(c, "用户取消任务");
+          await save(c);
           return json(res, snapshot(c));
         }
         getCapture(c.id, true);
         requireEngine();
+        if (action === "report" || action === "diagnostics") {
+          const resolved = await resolveFilter(
+            c,
+            url.searchParams.get("filter") || "",
+          );
+          const report = await diagnose(resolved.index);
+          if (url.searchParams.get("format") === "html") {
+            res.writeHead(200, {
+              "Content-Type": "text/html; charset=utf-8",
+              "Content-Disposition":
+                'attachment; filename="webtshark-report.html"',
+            });
+            return res.end(reportHtml(report, c.name));
+          }
+          return json(res, report);
+        }
+        if (action === "locate" && method === "GET") {
+          const idx = (
+            await resolveFilter(c, url.searchParams.get("filter") || "")
+          ).index;
+          const target = Number(url.searchParams.get("no")),
+            time = Number(url.searchParams.get("time"));
+          const mode = url.searchParams.get("mode") || "number",
+            size = Math.min(
+              1000,
+              Math.max(1, Number(url.searchParams.get("size")) || 100),
+            );
+          const text = (url.searchParams.get("text") || "").toLowerCase();
+          let row = 0;
+          for await (const p of indexRecords(idx)) {
+            if (
+              (mode === "number" && p.no === target) ||
+              (mode === "time" && p.time >= time) ||
+              (mode === "issue" && p.no > target && (p.issue || p.expert)) ||
+              (mode === "search" &&
+                p.no > target &&
+                JSON.stringify(p.fields).toLowerCase().includes(text))
+            )
+              return json(res, { no: p.no, page: Math.floor(row / size) });
+            row++;
+          }
+          throw Object.assign(new Error("未找到匹配数据包"), { status: 404 });
+        }
         if (action === "config" && method === "PUT") {
           const config = validateConfig(await readJson(req));
-          void analyze(c, config);
+          schedule(c, config);
           return json(res, snapshot(c), 202);
         }
         if (action === "packets" && !parts[4] && method === "GET") {
@@ -353,7 +539,11 @@ const server = http.createServer(async (req, res) => {
             .flatMap((value) => value.split(","))
             .map((value) => value.trim())
             .filter(Boolean);
-          const resolved = await resolveFilter(c, requestedFilter, requestedFields);
+          const resolved = await resolveFilter(
+            c,
+            requestedFilter,
+            requestedFields,
+          );
           const index = resolved.index;
           const page = Math.max(0, Number(url.searchParams.get("page")) || 0);
           const rawSize = url.searchParams.get("size");
@@ -362,9 +552,11 @@ const server = http.createServer(async (req, res) => {
             ? Math.min(1000, Math.max(1, Math.floor(requestedSize)))
             : 100;
           const sortField = url.searchParams.get("sort") || "";
-          const sortDirection = url.searchParams.get("direction") === "desc" ? "desc" : "asc";
+          const sortDirection =
+            url.searchParams.get("direction") === "desc" ? "desc" : "asc";
           const sort =
-            sortField && !(sortField === "frame.number" && sortDirection === "asc")
+            sortField &&
+            !(sortField === "frame.number" && sortDirection === "asc")
               ? { field: sortField, direction: sortDirection }
               : null;
           return json(res, {
@@ -403,10 +595,7 @@ const server = http.createServer(async (req, res) => {
         if (action === "waveform" && method === "GET")
           return json(
             res,
-            await waveformFor(
-              c,
-              Number(url.searchParams.get("stream")),
-            ),
+            await waveformFor(c, Number(url.searchParams.get("stream"))),
           );
         if (action === "export") {
           const filter = url.searchParams.get("filter") || "";
@@ -467,7 +656,8 @@ server.requestTimeout = 15 * 60 * 1000;
 server.headersTimeout = 30000;
 server.listen(listenPort, listenHost, () => {
   const address = server.address();
-  const port = typeof address === "object" && address ? address.port : listenPort;
+  const port =
+    typeof address === "object" && address ? address.port : listenPort;
   console.log(
     `WebShark API: http://${listenHost}:${port} · ${engineError || engineVersion}`,
   );

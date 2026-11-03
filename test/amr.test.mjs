@@ -158,9 +158,12 @@ test("same PT supports AMR and AMR-WB with both payload formats in separate SSRC
     );
     assert.equal(Number(find(detail.layers, `amr.${band}.cmr`).value), 15);
     assert.equal(Number(find(detail.layers, `amr.${band}.toc.ft`).value), 0);
-    assert.ok(
-      find(detail.layers, "amr.frame_data"),
-      "native AMR speech payload fields",
+    // Native speech-data fields vary across Wireshark versions (4.2 exposes
+    // WB headers only). Always verify that no payload bytes were lost.
+    assert.equal(
+      find(detail.layers, "webshark.rtp.payload").value.replaceAll(":", ""),
+      payloadFor(flow).toString("hex"),
+      "exact AMR payload remains available with native CMR/ToC fields",
     );
     assert.equal(
       Number(find(detail.layers, "amr.payload_decoded_as").value),

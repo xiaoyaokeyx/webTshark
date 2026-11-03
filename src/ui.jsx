@@ -41,7 +41,14 @@ export function Protocol({ name }) {
     <span className={`protocol protocol-${protocolClass(name)}`}>{name}</span>
   );
 }
-export function Modal({ title, subtitle, onClose, children, wide = false }) {
+export function Modal({
+  title,
+  subtitle,
+  onClose,
+  children,
+  wide = false,
+  className = "",
+}) {
   const ref = useRef(null);
   useEffect(() => {
     const previous = document.activeElement;
@@ -95,7 +102,7 @@ export function Modal({ title, subtitle, onClose, children, wide = false }) {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`modal ${wide ? "modal-wide" : ""}`}
+        className={`modal ${wide ? "modal-wide" : ""} ${className}`}
       >
         <header className="modal-heading">
           <div>

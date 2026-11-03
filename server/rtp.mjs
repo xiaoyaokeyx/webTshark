@@ -219,7 +219,7 @@ export function mappingLua(config) {
   const rules = maps
     .map(
       (m) =>
-        `{pt=${m.pt}, codec=${luaString(m.codec)}, rate=${m.clockRate}, channels=${m.channels}, decoder=${luaString(codecs.find((c) => c.name === m.codec)?.dissector || "")}${codecs.find((c) => c.name === m.codec)?.amr ? `, amr_mode=${luaString(m.codec === "AMR" ? "AMR-NB" : "AMR-WB")}, amr_encoding=${luaString(m.octetAlign ? "octet_aligned" : "bw_efficient")}` : ""}${m.scope === "stream" ? `, src=${luaString(m.source)}, dst=${luaString(m.destination)}, sp=${m.srcPort}, dp=${m.dstPort}, ssrc=${Number(m.ssrc)}` : ""}}`,
+        `{pt=${m.pt}, codec=${luaString(m.codec)}, rate=${m.clockRate}, channels=${m.channels}, decoder=${luaString(codecs.find((c) => c.name === m.codec)?.dissector || "")}${codecs.find((c) => c.name === m.codec)?.amr ? `, amr_mode=${luaString(m.codec === "AMR" ? "AMR-NB" : "AMR-WB")}, amr_encoding=${luaString(m.octetAlign ? "RFC 3267 Byte aligned" : "RFC 3267 Bandwidth-efficient")}` : ""}${m.scope === "stream" ? `, src=${luaString(m.source)}, dst=${luaString(m.destination)}, sp=${m.srcPort}, dp=${m.dstPort}, ssrc=${Number(m.ssrc)}` : ""}}`,
     )
     .join(",\n");
   return `local p=Proto("webshark_rtp","WebShark RTP payload mapping")
@@ -326,7 +326,10 @@ export function observeSequence(tracker, sequence) {
   if (wasBehind && !restarted) tracker.reordered += 1;
   tracker.highest = Math.max(tracker.highest, extended);
   let index = 0;
-  while (index < tracker.ranges.length && tracker.ranges[index][1] < extended - 1)
+  while (
+    index < tracker.ranges.length &&
+    tracker.ranges[index][1] < extended - 1
+  )
     index += 1;
   const duplicate =
     Boolean(tracker.ranges[index]) &&
@@ -384,8 +387,11 @@ export function finishSequenceTracker(tracker) {
   const gapByKey = new Map();
   let lost = 0;
   for (const items of bySegment.values()) {
-    const unique = [...new Set(items.filter((item) => !item.duplicate).map((item) => item.extended))]
-      .sort((a, b) => a - b);
+    const unique = [
+      ...new Set(
+        items.filter((item) => !item.duplicate).map((item) => item.extended),
+      ),
+    ].sort((a, b) => a - b);
     let previous = null;
     for (const extended of unique) {
       const gap = previous == null ? 0 : Math.max(0, extended - previous - 1);
@@ -401,7 +407,9 @@ export function finishSequenceTracker(tracker) {
     unique: tracker.unique,
     observations: tracker.observations.map((item) => ({
       ...item,
-      lostBefore: item.duplicate ? 0 : gapByKey.get(`${item.segment}:${item.extended}`) || 0,
+      lostBefore: item.duplicate
+        ? 0
+        : gapByKey.get(`${item.segment}:${item.extended}`) || 0,
     })),
   };
 }

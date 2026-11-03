@@ -135,11 +135,22 @@ function udpPacket({ seq, ssrc, pt, port, reverse = false }) {
   const eth = Buffer.from("00112233445566778899aabb0800", "hex");
   return Buffer.concat([eth, ip, udp, rtp, payload]);
 }
-export function buildDemoPcap({ rtpOnly = false } = {}) {
+export function buildDemoPcap({ rtpOnly = false, packetCount = null } = {}) {
+  const count = Number.isInteger(packetCount) ? Math.max(1, packetCount) : null;
+  // A one-packet fixture is intentionally SIP so the detail tree is useful in
+  // the UI while still remaining a valid, minimal PCAP.
+  const selectedPackets =
+    count === 1
+      ? [packets.find((packet) => packet.protocol === 'SIP') || packets[0]]
+      : count == null
+        ? packets
+        : packets.slice(0, count);
   const frames = rtpOnly
     ? []
-    : packets.map((p) => ({ time: p.time, bytes: Buffer.from(p.bytes) }));
-  for (let i = 0; i < 70; i++) {
+    : selectedPackets.map((p) => ({ time: p.time, bytes: Buffer.from(p.bytes) }));
+  // The normal demo includes the RTP streams. Explicit packet-count requests
+  // must remain exact, so they do not receive the extra synthetic RTP frames.
+  for (let i = 0; count == null && i < 70; i++) {
     if (i !== 25)
       frames.push({
         time: 2 + i * 0.02,

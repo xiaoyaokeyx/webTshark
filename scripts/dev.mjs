@@ -11,9 +11,16 @@ const apiPort = flagValue("--api-port") || process.env.PORT || "3001";
 const uiPort = flagValue("--ui-port") || process.env.UI_PORT || "5173";
 const viteArgs = process.argv.slice(2).filter((arg, index, args) => {
   if (["--host", "--api-port", "--ui-port"].includes(arg)) return false;
-  if (index > 0 && ["--host", "--api-port", "--ui-port"].includes(args[index - 1]))
+  if (
+    index > 0 &&
+    ["--host", "--api-port", "--ui-port"].includes(args[index - 1])
+  )
     return false;
-  if (arg.startsWith("--host=") || arg.startsWith("--api-port=") || arg.startsWith("--ui-port="))
+  if (
+    arg.startsWith("--host=") ||
+    arg.startsWith("--api-port=") ||
+    arg.startsWith("--ui-port=")
+  )
     return false;
   return true;
 });
@@ -29,6 +36,8 @@ const processes = [
         PORT: apiPort,
         WEBSHARK_API_HOST: host,
         WEBSHARK_API_PORT: apiPort,
+        WEBSHARK_DEV_ORIGINS:
+          process.env.WEBSHARK_DEV_ORIGINS || "http://terminal.local:4173",
       },
     },
   ),

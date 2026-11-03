@@ -60,6 +60,7 @@ import RtpPanel, {
   RtpDetection,
 } from "./RtpPanel.jsx";
 import SipFlow from "./SipFlow.jsx";
+import { FeaturePanel } from "./Enhancements.jsx";
 const nav = [
   ["packets", "数据包分析", Layers3],
   ["sipFlow", "SIP 时序图", PhoneCall],
@@ -288,10 +289,7 @@ function formatPacketTime(packet, format) {
     hours = utc ? date.getUTCHours() : date.getHours(),
     minutes = utc ? date.getUTCMinutes() : date.getMinutes(),
     seconds = utc ? date.getUTCSeconds() : date.getSeconds(),
-    fraction = String(((microseconds % 1e6) + 1e6) % 1e6).padStart(
-      6,
-      "0",
-    );
+    fraction = String(((microseconds % 1e6) + 1e6) % 1e6).padStart(6, "0");
   return `${year}-${part(month)}-${part(day)} ${part(hours)}:${part(minutes)}:${part(seconds)}.${fraction}`;
 }
 function isSipPacket(packet) {
@@ -313,7 +311,8 @@ function addSipCompareField(target, field, namespace, keyOverride = null) {
   target.push({
     baseKey,
     key: duplicate ? `${baseKey} #${duplicate + 1}` : baseKey,
-    value: field.value == null || field.value === "" ? "—" : String(field.value),
+    value:
+      field.value == null || field.value === "" ? "—" : String(field.value),
   });
 }
 const sipSdpLinePrefixes = {
@@ -367,15 +366,25 @@ function sipComparisonFields(detail) {
       /sip\.(Request-Line|Status-Line)$/.test(field.name || ""),
     );
     if (startLine)
-      headers.push({ baseKey: "Start-Line", key: "Start-Line", value: String(startLine.value) });
-    const headerGroup = (sip.fields || []).find((field) => field.name === "sip.msg_hdr");
-    (headerGroup?.fields || []).forEach((field) => addSipCompareField(headers, field, "sip"));
+      headers.push({
+        baseKey: "Start-Line",
+        key: "Start-Line",
+        value: String(startLine.value),
+      });
+    const headerGroup = (sip.fields || []).find(
+      (field) => field.name === "sip.msg_hdr",
+    );
+    (headerGroup?.fields || []).forEach((field) =>
+      addSipCompareField(headers, field, "sip"),
+    );
   }
   // TShark may expose SDP as a dedicated layer or nest it beneath the SIP
   // layer, depending on the dissector output/version. Walk both locations so
   // the comparison works for real captures as well as the demo capture.
   const dedicatedSdp = collectSipSdpLines(sdp?.fields),
-    nestedSdp = dedicatedSdp.length ? dedicatedSdp : collectSipSdpLines(sip?.fields);
+    nestedSdp = dedicatedSdp.length
+      ? dedicatedSdp
+      : collectSipSdpLines(sip?.fields);
   return {
     headers,
     sdp: nestedSdp,
@@ -385,11 +394,21 @@ function sipComparisonFields(detail) {
 function mergeSipCompareRows(left = [], right = []) {
   const leftMap = new Map(left.map((field) => [field.key, field.value])),
     rightMap = new Map(right.map((field) => [field.key, field.value])),
-    keys = [...new Set([...left.map((field) => field.key), ...right.map((field) => field.key)])];
+    keys = [
+      ...new Set([
+        ...left.map((field) => field.key),
+        ...right.map((field) => field.key),
+      ]),
+    ];
   return keys.map((key) => {
     const leftValue = leftMap.get(key) ?? "—",
       rightValue = rightMap.get(key) ?? "—";
-    return { key, left: leftValue, right: rightValue, different: leftValue !== rightValue };
+    return {
+      key,
+      left: leftValue,
+      right: rightValue,
+      different: leftValue !== rightValue,
+    };
   });
 }
 function mergeSipSdpLines(left = [], right = []) {
@@ -450,7 +469,8 @@ function mergeSipSdpLines(left = [], right = []) {
     }
     const removed = [],
       added = [];
-    while (operations[index]?.type === "removed") removed.push(operations[index++]);
+    while (operations[index]?.type === "removed")
+      removed.push(operations[index++]);
     while (operations[index]?.type === "added") added.push(operations[index++]);
     const length = Math.max(removed.length, added.length);
     for (let offset = 0; offset < length; offset += 1) {
@@ -458,11 +478,18 @@ function mergeSipSdpLines(left = [], right = []) {
         rightLine = added[offset]?.right || null;
       rows.push({
         key: `sdp-${rows.length + 1}`,
-        status: leftLine && rightLine ? "changed" : leftLine ? "removed" : "added",
+        status:
+          leftLine && rightLine ? "changed" : leftLine ? "removed" : "added",
         left: leftLine?.value || null,
         right: rightLine?.value || null,
-        leftLine: removed[offset]?.leftIndex == null ? null : removed[offset].leftIndex + 1,
-        rightLine: added[offset]?.rightIndex == null ? null : added[offset].rightIndex + 1,
+        leftLine:
+          removed[offset]?.leftIndex == null
+            ? null
+            : removed[offset].leftIndex + 1,
+        rightLine:
+          added[offset]?.rightIndex == null
+            ? null
+            : added[offset].rightIndex + 1,
       });
     }
   }
@@ -479,7 +506,10 @@ function SipCompareSection({ title, rows, meta = "", columnTitle = "字段" }) {
     <section className="sip-compare-section">
       <div className="sip-compare-heading">
         <h3>{title}</h3>
-        <span>{meta ? `${meta} · ` : ""}{rows.filter((row) => row.different).length} 项不同</span>
+        <span>
+          {meta ? `${meta} · ` : ""}
+          {rows.filter((row) => row.different).length} 项不同
+        </span>
       </div>
       {rows.length ? (
         <div className="compare-table sip-compare-table">
@@ -489,7 +519,10 @@ function SipCompareSection({ title, rows, meta = "", columnTitle = "字段" }) {
             <span>报文 B</span>
           </div>
           {rows.map((row) => (
-            <div className={`sip-compare-grid ${row.different ? "is-different" : ""}`} key={row.key}>
+            <div
+              className={`sip-compare-grid ${row.different ? "is-different" : ""}`}
+              key={row.key}
+            >
               <span>{row.key}</span>
               <code>{row.left}</code>
               <code>{row.right}</code>
@@ -497,13 +530,20 @@ function SipCompareSection({ title, rows, meta = "", columnTitle = "字段" }) {
           ))}
         </div>
       ) : (
-        <div className="sip-compare-empty">两个报文都没有可比较的 {title}。</div>
+        <div className="sip-compare-empty">
+          两个报文都没有可比较的 {title}。
+        </div>
       )}
     </section>
   );
 }
 function SipSdpDiffSection({ diff }) {
-  const labels = { same: "相同", changed: "修改", added: "新增", removed: "删除" };
+  const labels = {
+    same: "相同",
+    changed: "修改",
+    added: "新增",
+    removed: "删除",
+  };
   return (
     <section className="sip-compare-section sip-sdp-diff-section">
       <div className="sip-compare-heading">
@@ -511,7 +551,10 @@ function SipSdpDiffSection({ diff }) {
           <h3>SDP 原始行差异</h3>
           <p>按原始行顺序对齐，不拆解字段</p>
         </div>
-        <span>{diff.rows.length} 行 · {diff.counts.changed + diff.counts.added + diff.counts.removed} 项变化</span>
+        <span>
+          {diff.rows.length} 行 ·{" "}
+          {diff.counts.changed + diff.counts.added + diff.counts.removed} 项变化
+        </span>
       </div>
       <div className="sip-diff-summary" aria-label="SDP 差异统计">
         {Object.entries(labels).map(([status, label]) => (
@@ -531,7 +574,10 @@ function SipSdpDiffSection({ diff }) {
           <div className={`sip-diff-grid is-${row.status}`} key={row.key}>
             <span className="sip-diff-status">
               <strong>{labels[row.status]}</strong>
-              <small>{row.leftLine ? `A:${row.leftLine}` : "A:—"} · {row.rightLine ? `B:${row.rightLine}` : "B:—"}</small>
+              <small>
+                {row.leftLine ? `A:${row.leftLine}` : "A:—"} ·{" "}
+                {row.rightLine ? `B:${row.rightLine}` : "B:—"}
+              </small>
             </span>
             <code>{row.left || ""}</code>
             <code>{row.right || ""}</code>
@@ -601,6 +647,19 @@ function highlighted(text, needle) {
   return parts;
 }
 export default function App() {
+  const [openTabs, setOpenTabs] = useState([]),
+    [activeTab, setActiveTab] = useState(null),
+    [feature, setFeature] = useState(null);
+  const workspaces = useRef(new Map()),
+    activeTabRef = useRef(null),
+    closedTabs = useRef([]);
+  const [filterHistory, setFilterHistory] = useState(() =>
+    readStorage("webshark-filter-history", []),
+  );
+  const historyCursor = useRef(-1),
+    historyNavigation = useRef(false);
+  const [rangeStart, setRangeStart] = useState("1"),
+    [rangeEnd, setRangeEnd] = useState("10");
   const [health, setHealth] = useState(null),
     [captures, setCaptures] = useState([]),
     [capture, setCapture] = useState(null),
@@ -688,19 +747,27 @@ export default function App() {
     visibleColumns = columnState
       .map(({ id }) => columnById.get(id))
       .filter(Boolean)
-      .filter((column) => !columnState.find((item) => item.id === column.id)?.hidden),
-    requestedFields = [...new Set(visibleColumns.map((column) => column.field).filter(Boolean))],
+      .filter(
+        (column) => !columnState.find((item) => item.id === column.id)?.hidden,
+      ),
+    requestedFields = [
+      ...new Set(visibleColumns.map((column) => column.field).filter(Boolean)),
+    ],
     comparePackets = compareSelection
       .map((no) => rows.find((p) => p.no === no))
       .filter(Boolean),
-    sipCompare = comparePackets.length === 2 && comparePackets.every(isSipPacket),
+    sipCompare =
+      comparePackets.length === 2 && comparePackets.every(isSipPacket),
     ready = capture?.status === "ready";
   const title = nav.find(([id]) => id === view)?.[1] || "数据包分析";
   const displayRows = rows;
   useEffect(() => {
     try {
       localStorage.setItem("webshark-columns", JSON.stringify(columnState));
-      localStorage.setItem("webshark-column-widths", JSON.stringify(columnWidths));
+      localStorage.setItem(
+        "webshark-column-widths",
+        JSON.stringify(columnWidths),
+      );
       localStorage.setItem("webshark-time-format", timeFormat);
       localStorage.setItem("webshark-page-size", String(pageSize));
     } catch {}
@@ -738,6 +805,13 @@ export default function App() {
   async function boot() {
     const version = ++bootSerial.current;
     setBootError("");
+    if (import.meta.env?.VITE_STATIC_PREVIEW === "1") {
+      setHealth({ ready: false, preview: true });
+      setBootError(
+        "当前为前端预览：报文构造和 PCAP 下载可直接使用。抓包解析、诊断及报告需部署附带的 Node + TShark 服务。",
+      );
+      return;
+    }
     try {
       const h = await api("/health");
       if (version !== bootSerial.current) return;
@@ -761,9 +835,37 @@ export default function App() {
         );
     }
   }
-  function selectCapture(c) {
+  function selectCapture(c, tabId = `capture:${c.id}`, label = c.name) {
+    const previousId = activeTabRef.current;
+    if (previousId)
+      workspaces.current.set(previousId, {
+        expression,
+        applied,
+        query,
+        view,
+        selectedNo,
+        bookmarked: new Set(bookmarked),
+        markedOnly,
+        activeSavedViewId,
+        sort,
+        pageSize,
+        rows,
+        detail,
+        total,
+        filteredBytes,
+        page,
+        relation,
+      });
+    const saved = workspaces.current.get(tabId);
+    activeTabRef.current = tabId;
+    setActiveTab(tabId);
+    setOpenTabs((tabs) =>
+      tabs.some((t) => t.id === tabId)
+        ? tabs
+        : [...tabs, { id: tabId, captureId: c.id, label }],
+    );
     setCapture(c);
-    setRows([]);
+    setRows(c.id === capture?.id ? rows : []);
     setDetail(null);
     setRelation(null);
     setExpression("");
@@ -782,6 +884,45 @@ export default function App() {
     setDecodeTarget(null);
     setActiveSavedViewId(null);
     sessionStorage.setItem("webshark-capture", c.id);
+    if (saved) {
+      setRows(saved.rows || []);
+      setDetail(saved.detail || null);
+      setTotal(saved.total || 0);
+      setFilteredBytes(saved.filteredBytes || 0);
+      setPage(saved.page || 0);
+      setRelation(saved.relation || null);
+      setExpression(saved.expression);
+      setApplied(saved.applied);
+      setQuery(saved.query);
+      setView(saved.view);
+      setSelectedNo(saved.selectedNo);
+      setBookmarked(saved.bookmarked);
+      setMarkedOnly(saved.markedOnly);
+      setActiveSavedViewId(saved.activeSavedViewId);
+      setSort(saved.sort);
+      setPageSize(saved.pageSize);
+    }
+  }
+  function closeTab(id) {
+    const removed = openTabs.find((t) => t.id === id);
+    if (removed) closedTabs.current.push(removed);
+    const remaining = openTabs.filter((t) => t.id !== id);
+    setOpenTabs(remaining);
+    if (activeTabRef.current === id) {
+      const target = remaining.at(-1),
+        c = captures.find((c) => c.id === target?.captureId);
+      if (c) selectCapture(c, target.id, target.label);
+      else {
+        activeTabRef.current = null;
+        setActiveTab(null);
+        clearCapture();
+      }
+    }
+  }
+  function reopenTab() {
+    const tab = closedTabs.current.pop(),
+      c = captures.find((c) => c.id === tab?.captureId);
+    if (c) selectCapture(c, tab.id, tab.label);
   }
   function toggleSort(key) {
     setSort((current) =>
@@ -789,7 +930,9 @@ export default function App() {
         ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
         : { key, direction: "asc" },
     );
-    setQuery((current) => (current.page === 0 ? current : { ...current, page: 0 }));
+    setQuery((current) =>
+      current.page === 0 ? current : { ...current, page: 0 },
+    );
   }
   function startColumnResize(event, columnId) {
     event.preventDefault();
@@ -815,7 +958,9 @@ export default function App() {
     setCompareSelection((current) => {
       if (current.includes(packet.no))
         return current.filter((no) => no !== packet.no);
-      return current.length >= 2 ? [current[1], packet.no] : [...current, packet.no];
+      return current.length >= 2
+        ? [current[1], packet.no]
+        : [...current, packet.no];
     });
   }
   function packetClick(event, packet) {
@@ -865,7 +1010,9 @@ export default function App() {
     }
     const existing =
       columnById.get(normalized) ||
-      columnById.get(columnCatalog.find(([, , field]) => field === normalized)?.[0]);
+      columnById.get(
+        columnCatalog.find(([, , field]) => field === normalized)?.[0],
+      );
     if (existing) {
       setColumnState((current) =>
         current.some((item) => item.id === existing.id)
@@ -907,6 +1054,10 @@ export default function App() {
     setSort({ key: "no", direction: "asc" });
   }
   function closeCapture() {
+    if (activeTabRef.current) closeTab(activeTabRef.current);
+    else clearCapture();
+  }
+  function clearCapture() {
     streamSerial.current++;
     setCapture(null);
     setRows([]);
@@ -942,7 +1093,11 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (!capture || !["indexing", "uploading"].includes(capture.status)) return;
+    if (
+      !capture ||
+      !["queued", "paused", "indexing", "uploading"].includes(capture.status)
+    )
+      return;
     let cancelled = false,
       timer;
     const poll = async () => {
@@ -950,7 +1105,7 @@ export default function App() {
         const next = await api(capturePath(capture.id));
         if (cancelled) return;
         setCapture(next);
-        if (["indexing", "uploading"].includes(next.status))
+        if (["queued", "paused", "indexing", "uploading"].includes(next.status))
           timer = setTimeout(poll, 700);
         else {
           refreshList().catch(() => {});
@@ -1069,7 +1224,13 @@ export default function App() {
         if (!controller.signal.aborted) setSipCompareLoading(false);
       });
     return () => controller.abort();
-  }, [modal, capture?.id, capture?.revision, sipCompare, compareSelection.join(",")]);
+  }, [
+    modal,
+    capture?.id,
+    capture?.revision,
+    sipCompare,
+    compareSelection.join(","),
+  ]);
   useEffect(() => {
     const row = tableRef.current?.querySelector(".selected-row");
     if (!row) return;
@@ -1136,6 +1297,18 @@ export default function App() {
     };
   }, [expression]);
   function apply(value = expression) {
+    if (!historyNavigation.current) {
+      const next = [value, ...filterHistory.filter((f) => f !== value)].slice(
+        0,
+        50,
+      );
+      setFilterHistory(next);
+      try {
+        localStorage.setItem("webshark-filter-history", JSON.stringify(next));
+      } catch {}
+      historyCursor.current = 0;
+    }
+    historyNavigation.current = false;
     setExpression(value);
     setQuery({ filter: value, page: 0 });
     setView("packets");
@@ -1263,7 +1436,11 @@ export default function App() {
         ...savedViews.filter(
           (saved) =>
             saved.id !== item.id &&
-            !(saved.captureId === capture.id && saved.filter === filter && saved.view === view),
+            !(
+              saved.captureId === capture.id &&
+              saved.filter === filter &&
+              saved.view === view
+            ),
         ),
       ].slice(0, 20);
     persistSavedViews(next);
@@ -1273,13 +1450,19 @@ export default function App() {
     setToast(`已保存“${label}”分析视图`);
   }
   function openSavedWorkspace(item) {
-    const target = captures.find((candidate) => candidate.id === item.captureId);
+    const target = captures.find(
+      (candidate) => candidate.id === item.captureId,
+    );
     if (!target) {
       persistSavedViews(savedViews.filter((saved) => saved.id !== item.id));
       setToast("对应抓包文件已不存在，已移除这条保存视图");
       return;
     }
-    if (target.id !== capture?.id) selectCapture(target);
+    selectCapture(
+      target,
+      `saved:${item.id}`,
+      item.label || item.filter || target.name,
+    );
     const filter = item.filter || "";
     setExpression(filter);
     setApplied(filter);
@@ -1333,6 +1516,50 @@ export default function App() {
       setUploading(false);
     }
   }
+  async function createDemoCapture(packetCount = null) {
+    try {
+      const endpoint =
+        packetCount == null ? "/demo" : `/demo?count=${packetCount}`;
+      const c = await api(endpoint, { method: "POST" });
+      selectCapture(c);
+      setModal(null);
+      setView("packets");
+      refreshList().catch(() => {});
+    } catch (e) {
+      setImportError(e.message);
+    }
+  }
+  async function locatePacket(no, filter = applied) {
+    try {
+      const result = await api(
+        capturePath(
+          capture.id,
+          `/locate?${new URLSearchParams({ no: String(no), filter, size: String(pageSize) })}`,
+        ),
+      );
+      setExpression(filter);
+      setApplied(filter);
+      setQuery({ filter, page: result.page });
+      setSelectedNo(result.no);
+      setView("packets");
+    } catch (e) {
+      setToast(e.message);
+    }
+  }
+  function saveMarkedView() {
+    if (!capture || !bookmarked.size) return setToast("请先标记数据包");
+    const item = {
+      id: `saved-${Date.now()}`,
+      captureId: capture.id,
+      captureName: capture.name,
+      filter: `frame.number in {${[...bookmarked].sort((a, b) => a - b).join(" ")}}`,
+      view: "packets",
+      label: `收藏 ${bookmarked.size} 个包`,
+      savedAt: Date.now(),
+    };
+    persistSavedViews([item, ...savedViews].slice(0, 20));
+    openSavedWorkspace(item);
+  }
   async function updateConfig(config) {
     if (!ready) throw new Error("请等待当前解析完成");
     const next = await api(capturePath(capture.id, "/config"), {
@@ -1383,7 +1610,8 @@ export default function App() {
     const transport = packet?.transport?.toLowerCase();
     if (!transport) return;
     const ports = [packet.dstPort, packet.srcPort].filter(
-      (port, index, list) => Number.isInteger(port) && list.indexOf(port) === index,
+      (port, index, list) =>
+        Number.isInteger(port) && list.indexOf(port) === index,
     );
     const existing = (capture?.config?.decodeAs || []).find(
       (rule) => rule.transport === transport && ports.includes(rule.port),
@@ -1459,7 +1687,12 @@ export default function App() {
       await api(capturePath(c.id), { method: "DELETE" });
       setPendingDelete(null);
       persistSavedViews(savedViews.filter((item) => item.captureId !== c.id));
-      if (activeSavedViewId && savedViews.some((item) => item.id === activeSavedViewId && item.captureId === c.id)) {
+      if (
+        activeSavedViewId &&
+        savedViews.some(
+          (item) => item.id === activeSavedViewId && item.captureId === c.id,
+        )
+      ) {
         setActiveSavedViewId(null);
       }
       const list = await refreshList();
@@ -1513,17 +1746,17 @@ export default function App() {
           {nav
             .filter(([id]) => id === "packets")
             .map(([id, label, Icon]) => (
-            <button
-              key={id}
-              className={`nav-item ${view === id ? "active" : ""}`}
-              onClick={() => navigate(id)}
-            >
-              <Icon size={18} />
-              <span>{label}</span>
-              {id === "packets" && (
-                <span className="nav-count">{summary.count}</span>
-              )}
-            </button>
+              <button
+                key={id}
+                className={`nav-item ${view === id ? "active" : ""}`}
+                onClick={() => navigate(id)}
+              >
+                <Icon size={18} />
+                <span>{label}</span>
+                {id === "packets" && (
+                  <span className="nav-count">{summary.count}</span>
+                )}
+              </button>
             ))}
           {nav
             .filter(([id]) => id === "sipFlow")
@@ -1535,16 +1768,28 @@ export default function App() {
               >
                 <Icon size={18} />
                 <span>{label}</span>
-                {summary.protocols.find((item) => /^sip/i.test(String(item.protocol || "")))?.count > 0 && (
+                {summary.protocols.find((item) =>
+                  /^sip/i.test(String(item.protocol || "")),
+                )?.count > 0 && (
                   <span className="nav-count">
-                    {summary.protocols.find((item) => /^sip/i.test(String(item.protocol || ""))).count}
+                    {
+                      summary.protocols.find((item) =>
+                        /^sip/i.test(String(item.protocol || "")),
+                      ).count
+                    }
                   </span>
                 )}
               </button>
             ))}
           <button
             className={`nav-item nav-group-toggle ${
-              ["statistics", "conversations", "endpoints", "rtp", "expert"].includes(view)
+              [
+                "statistics",
+                "conversations",
+                "endpoints",
+                "rtp",
+                "expert",
+              ].includes(view)
                 ? "is-active"
                 : ""
             }`}
@@ -1559,7 +1804,13 @@ export default function App() {
             <div className="nav-subitems">
               {nav
                 .filter(([id]) =>
-                  ["statistics", "conversations", "endpoints", "rtp", "expert"].includes(id),
+                  [
+                    "statistics",
+                    "conversations",
+                    "endpoints",
+                    "rtp",
+                    "expert",
+                  ].includes(id),
                 )
                 .map(([id, label, Icon]) => (
                   <button
@@ -1573,7 +1824,9 @@ export default function App() {
                       <span className="nav-count">{summary.media.length}</span>
                     )}
                     {id === "expert" && summary.issueCount > 0 && (
-                      <span className="warning-count">{summary.issueCount}</span>
+                      <span className="warning-count">
+                        {summary.issueCount}
+                      </span>
                     )}
                   </button>
                 ))}
@@ -1611,7 +1864,8 @@ export default function App() {
                 <span>
                   <strong>{item.label || item.filter || "全部数据包"}</strong>
                   <small>
-                    {item.captureName || "抓包文件"} · {item.filter ? "筛选视图" : "完整抓包"}
+                    {item.captureName || "抓包文件"} ·{" "}
+                    {item.filter ? "筛选视图" : "完整抓包"}
                   </small>
                 </span>
               </button>
@@ -1668,11 +1922,49 @@ export default function App() {
         <div className="sidebar-bottom">
           <div className="sidebar-version">
             <span>WebShark</span>
-            <span>Offline Analyzer v0.2</span>
+            <span>Offline Analyzer v0.3</span>
           </div>
         </div>
       </aside>
       <div className="main-shell">
+        <div
+          className="capture-tabs"
+          role="tablist"
+          aria-label="抓包与收藏标签页"
+        >
+          {openTabs.map((tab) => (
+            <div
+              className={`capture-tab ${activeTab === tab.id ? "is-active" : ""}`}
+              key={tab.id}
+            >
+              <button
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                onClick={() => {
+                  const c =
+                    captures.find((c) => c.id === tab.captureId) ||
+                    (capture?.id === tab.captureId ? capture : null);
+                  if (c) selectCapture(c, tab.id, tab.label);
+                }}
+              >
+                {tab.id.startsWith("saved:") ? "★ " : ""}
+                {tab.label}
+              </button>
+              <button
+                aria-label={`关闭标签 ${tab.label}`}
+                onClick={() => closeTab(tab.id)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button className="text-button" onClick={() => setModal("import")}>
+            ＋ 打开
+          </button>
+          <button className="text-button" onClick={reopenTab}>
+            重新打开关闭的标签
+          </button>
+        </div>
         <header className="topbar">
           <div className="breadcrumbs">
             <IconButton
@@ -1700,6 +1992,26 @@ export default function App() {
           </div>
         </header>
         <main className={`main-content main-content-${view}`}>
+          <div className="feature-launcher" aria-label="增强分析工具">
+            {health?.preview && (
+              <a
+                className="button secondary"
+                href="/webtshark-v0.3.0-source.zip"
+                download
+              >
+                下载完整源码与部署说明
+              </a>
+            )}
+            <button onClick={() => setFeature("compose")}>报文构造器</button>
+            <button onClick={() => setFeature("tasks")}>任务中心</button>
+            <button disabled={!ready} onClick={() => setFeature("diagnose")}>
+              自动诊断 / 报告
+            </button>
+            <button onClick={() => setFeature("compare")}>PCAP 对比</button>
+            <button disabled={!ready} onClick={() => setFeature("navigate")}>
+              跳转 / 搜索
+            </button>
+          </div>
           <div className="page-heading">
             <div>
               <div className="eyebrow">PACKET INTELLIGENCE</div>
@@ -1762,13 +2074,21 @@ export default function App() {
                       ? "已解析"
                       : capture.status === "indexing"
                         ? "解析中"
-                        : capture.status === "error"
-                          ? "解析失败"
-                          : capture.status === "cancelled"
-                            ? "已取消"
-                            : "上传中"}
+                        : capture.status === "queued"
+                          ? "排队中"
+                          : capture.status === "paused"
+                            ? "已暂停"
+                            : capture.status === "error"
+                              ? "解析失败"
+                              : capture.status === "cancelled"
+                                ? "已取消"
+                                : "上传中"}
                     <span className="meta-dot">·</span>
-                    {capture.demo ? "合成演示抓包 · 真实引擎解析" : "本地抓包"}
+                    {capture.demo
+                      ? capture.demoPacketCount
+                        ? `合成演示抓包 · 构造 ${capture.demoPacketCount} 个包`
+                        : "合成演示抓包 · 真实引擎解析"
+                      : "本地抓包"}
                     <span className="meta-dot">·</span>
                     {sizeLabel(capture.size)}
                   </span>
@@ -1835,7 +2155,7 @@ export default function App() {
               )}
             </section>
           )}
-          {capture?.status === "indexing" && (
+          {["queued", "paused", "indexing"].includes(capture?.status) && (
             <div className="analysis-progress" role="status">
               <LoaderCircle className="spin" size={25} />
               <div>
@@ -1949,9 +2269,7 @@ export default function App() {
                       >
                         <Code2 size={13} />
                         <span>{s}</span>
-                        {isSipMrcpSuggestion(s) && (
-                          <small>ASR/MRCP 关联</small>
-                        )}
+                        {isSipMrcpSuggestion(s) && <small>ASR/MRCP 关联</small>}
                       </button>
                     ))}
                   </div>
@@ -1967,14 +2285,38 @@ export default function App() {
                     <div>
                       <strong>ASR 关联过滤</strong>
                       <span>
-                        {relation.matches.length} 个 SIP 会话 · {relation.matches.reduce((count, item) => count + item.mrcpPackets, 0)} 个 MRCP · {relation.matches.reduce((count, item) => count + item.rtpPackets, 0)} 个 RTP · {relation.matches.reduce((count, item) => count + (item.rtcpPackets || 0), 0)} 个 RTCP
+                        {relation.matches.length} 个 SIP 会话 ·{" "}
+                        {relation.matches.reduce(
+                          (count, item) => count + item.mrcpPackets,
+                          0,
+                        )}{" "}
+                        个 MRCP ·{" "}
+                        {relation.matches.reduce(
+                          (count, item) => count + item.rtpPackets,
+                          0,
+                        )}{" "}
+                        个 RTP ·{" "}
+                        {relation.matches.reduce(
+                          (count, item) => count + (item.rtcpPackets || 0),
+                          0,
+                        )}{" "}
+                        个 RTCP
                       </span>
                     </div>
                     <div className="filter-relation-meta">
                       <code>
-                        {uniqueRelationChannels(relation).join(", ") || "未发现 Channel-ID"}
+                        {uniqueRelationChannels(relation).join(", ") ||
+                          "未发现 Channel-ID"}
                       </code>
                       {relation.warning && <span>{relation.warning}</span>}
+                      {relation.matches.some(
+                        (m) => m.mediaAssociation === "port-time-candidate",
+                      ) && (
+                        <span>
+                          部分媒体仅按端口与时间候选关联，SDP 地址未匹配，请核查
+                          NAT/抓包位置。
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2018,6 +2360,138 @@ export default function App() {
               <section
                 className={`packet-panel ${loading ? "is-loading" : ""}`}
               >
+                <div className="batch-toolbar packet-batch-tools">
+                  <div className="batch-group" aria-label="包导航">
+                    <button
+                      disabled={!rows.length}
+                      onClick={() => {
+                        const i = rows.findIndex((p) => p.no === selectedNo);
+                        setSelectedNo(rows[Math.max(0, i - 1)]?.no);
+                      }}
+                    >
+                      上一包
+                    </button>
+                    <button
+                      disabled={!rows.length}
+                      onClick={() => {
+                        const i = rows.findIndex((p) => p.no === selectedNo);
+                        setSelectedNo(
+                          rows[Math.min(rows.length - 1, i + 1)]?.no,
+                        );
+                      }}
+                    >
+                      下一包
+                    </button>
+                  </div>
+                  <div className="batch-group" aria-label="包标记">
+                    <button
+                      onClick={() =>
+                        setBookmarked(
+                          new Set([...bookmarked, ...rows.map((p) => p.no)]),
+                        )
+                      }
+                    >
+                      标记本页
+                    </button>
+                    <button onClick={() => setBookmarked(new Set())}>
+                      清除标记
+                    </button>
+                    <button
+                      disabled={!bookmarked.size}
+                      onClick={saveMarkedView}
+                    >
+                      收藏标记包 ({bookmarked.size})
+                    </button>
+                  </div>
+                  <details className="batch-extra">
+                    <summary>批量范围与过滤历史</summary>
+                    <div className="batch-extra-content">
+                      <div className="batch-group range-controls">
+                        <label>
+                          包号范围{" "}
+                          <input
+                            aria-label="范围起始包号"
+                            type="number"
+                            min="1"
+                            value={rangeStart}
+                            onChange={(e) => setRangeStart(e.target.value)}
+                          />
+                        </label>
+                        <span>—</span>
+                        <input
+                          aria-label="范围结束包号"
+                          type="number"
+                          min="1"
+                          value={rangeEnd}
+                          onChange={(e) => setRangeEnd(e.target.value)}
+                        />
+                        <button
+                          onClick={() => {
+                            const a = Number(rangeStart),
+                              b = Number(rangeEnd);
+                            if (
+                              !Number.isInteger(a) ||
+                              !Number.isInteger(b) ||
+                              a < 1 ||
+                              b < a ||
+                              b - a > 10000
+                            )
+                              return setToast("有效范围为 1–10000 个包");
+                            setBookmarked(
+                              new Set([
+                                ...bookmarked,
+                                ...Array.from(
+                                  { length: b - a + 1 },
+                                  (_, i) => a + i,
+                                ),
+                              ]),
+                            );
+                          }}
+                        >
+                          批量标记
+                        </button>
+                      </div>
+                      <div className="batch-group">
+                        <button
+                          onClick={() => {
+                            historyCursor.current = Math.min(
+                              filterHistory.length - 1,
+                              historyCursor.current + 1,
+                            );
+                            historyNavigation.current = true;
+                            apply(filterHistory[historyCursor.current] || "");
+                          }}
+                        >
+                          撤销过滤
+                        </button>
+                        <button
+                          onClick={() => {
+                            historyCursor.current = Math.max(
+                              0,
+                              historyCursor.current - 1,
+                            );
+                            historyNavigation.current = true;
+                            apply(filterHistory[historyCursor.current] || "");
+                          }}
+                        >
+                          恢复过滤
+                        </button>
+                        <select
+                          aria-label="过滤器历史"
+                          value=""
+                          onChange={(e) => apply(e.target.value)}
+                        >
+                          <option value="">过滤器历史</option>
+                          {filterHistory.map((f, i) => (
+                            <option key={i} value={f}>
+                              {f || "全部数据包"}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </details>
+                </div>
                 <div className="panel-toolbar">
                   <div className="panel-title">
                     <Layers3 size={16} />
@@ -2028,20 +2502,40 @@ export default function App() {
                   <div className="panel-tools">
                     <button
                       className={`text-button ${compareMode ? "accent-text" : ""}`}
-                      aria-label={compareMode ? `选择比较数据包 ${compareSelection.length}/2` : "进入数据包比较模式"}
-                      title={compareMode ? "点击两行选择数据包" : "选择两个数据包进行比较"}
+                      aria-label={
+                        compareMode
+                          ? `选择比较数据包 ${compareSelection.length}/2`
+                          : "进入数据包比较模式"
+                      }
+                      title={
+                        compareMode
+                          ? "点击两行选择数据包"
+                          : "选择两个数据包进行比较"
+                      }
                       onClick={() => {
                         setCompareMode(!compareMode);
                         if (compareMode) setCompareSelection([]);
                       }}
                     >
                       <GitCompareArrows size={14} />
-                      <span>{compareMode ? `选择中 ${compareSelection.length}/2` : "包比较"}</span>
+                      <span>
+                        {compareMode
+                          ? `选择中 ${compareSelection.length}/2`
+                          : "包比较"}
+                      </span>
                     </button>
                     <button
                       className="text-button"
-                      aria-label={sipCompare ? "比较选中 SIP 数据包的头域和 SDP" : "比较选中的两个数据包"}
-                      title={sipCompare ? "比较 SIP 头域和 SDP 原始行" : "查看两个选中数据包的差异"}
+                      aria-label={
+                        sipCompare
+                          ? "比较选中 SIP 数据包的头域和 SDP"
+                          : "比较选中的两个数据包"
+                      }
+                      title={
+                        sipCompare
+                          ? "比较 SIP 头域和 SDP 原始行"
+                          : "查看两个选中数据包的差异"
+                      }
                       disabled={compareSelection.length !== 2}
                       onClick={() => setModal("compare")}
                     >
@@ -2101,7 +2595,9 @@ export default function App() {
                                   }
                                 : undefined
                             }
-                            aria-sort={sort.key === column.id ? sort.direction : "none"}
+                            aria-sort={
+                              sort.key === column.id ? sort.direction : "none"
+                            }
                           >
                             <button
                               className="packet-column-button"
@@ -2110,7 +2606,8 @@ export default function App() {
                             >
                               <span className="packet-column-label">
                                 {column.id === "time"
-                                  ? timeHeaderLabels.get(timeFormat) || column.label
+                                  ? timeHeaderLabels.get(timeFormat) ||
+                                    column.label
                                   : column.label}
                               </span>
                               {sort.key === column.id ? (
@@ -2186,13 +2683,11 @@ export default function App() {
                                     }
                                   : undefined
                               }
-                              onContextMenu={(e) =>
-                                contextFor(e, p, column.id)
-                              }
+                              onContextMenu={(e) => contextFor(e, p, column.id)}
                               title={String(
                                 column.id === "time"
                                   ? formatPacketTime(p, timeFormat)
-                                  : columnValue(p, column) ?? "",
+                                  : (columnValue(p, column) ?? ""),
                               )}
                             >
                               {column.id === "no" ? (
@@ -2207,7 +2702,7 @@ export default function App() {
                               ) : column.id === "protocol" ? (
                                 <Protocol name={p.protocol} />
                               ) : (
-                                columnValue(p, column) ?? ""
+                                (columnValue(p, column) ?? "")
                               )}
                             </td>
                           ))}
@@ -2265,7 +2760,10 @@ export default function App() {
                         onChange={(event) => {
                           const next = Number(event.target.value);
                           setPageSize(next);
-                          setQuery((current) => ({ filter: current.filter, page: 0 }));
+                          setQuery((current) => ({
+                            filter: current.filter,
+                            page: 0,
+                          }));
                           setSelectedNo(null);
                           setDetail(null);
                         }}
@@ -2610,6 +3108,19 @@ export default function App() {
           </footer>
         </main>
       </div>
+      {feature && (
+        <FeaturePanel
+          kind={feature}
+          backendReady={health?.ready}
+          captures={captures}
+          capture={capture}
+          filter={applied}
+          onClose={() => setFeature(null)}
+          onOpen={selectCapture}
+          onLocate={locatePacket}
+          onRefresh={refreshList}
+        />
+      )}
       {context && (
         <ContextMenu
           context={context}
@@ -2723,19 +3234,19 @@ export default function App() {
               <button
                 className="button secondary"
                 disabled={uploading || !health?.ready}
-                onClick={async () => {
-                  try {
-                    const c = await api("/demo", { method: "POST" });
-                    selectCapture(c);
-                    setModal(null);
-                    setView("packets");
-                    refreshList().catch(() => {});
-                  } catch (e) {
-                    setImportError(e.message);
-                  }
-                }}
+                onClick={() => createDemoCapture()}
               >
                 打开示例
+              </button>
+              <button
+                className="button secondary"
+                disabled={uploading}
+                onClick={() => {
+                  setModal(null);
+                  setFeature("compose");
+                }}
+              >
+                构造 1 个包
               </button>
               {uploading ? (
                 <button
@@ -3034,7 +3545,8 @@ export default function App() {
                     onDrop={(event) => {
                       event.preventDefault();
                       reorderColumn(
-                        event.dataTransfer.getData("text/plain") || draggedColumn,
+                        event.dataTransfer.getData("text/plain") ||
+                          draggedColumn,
                         item.id,
                       );
                       setDraggedColumn(null);
@@ -3044,7 +3556,10 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={!item.hidden}
-                      disabled={!item.hidden && columnState.filter((x) => !x.hidden).length === 1}
+                      disabled={
+                        !item.hidden &&
+                        columnState.filter((x) => !x.hidden).length === 1
+                      }
                       aria-label={`显示 ${column.label}`}
                       onChange={() => toggleColumnHidden(item.id)}
                     />
@@ -3072,11 +3587,16 @@ export default function App() {
                       className="column-remove-button"
                       aria-label={`删除 ${column.label}`}
                       onClick={() => {
-                        if (columnState.filter((x) => !x.hidden).length === 1 && !item.hidden) {
+                        if (
+                          columnState.filter((x) => !x.hidden).length === 1 &&
+                          !item.hidden
+                        ) {
                           setToast("至少保留一列用于显示数据包");
                           return;
                         }
-                        setColumnState((current) => current.filter((x) => x.id !== item.id));
+                        setColumnState((current) =>
+                          current.filter((x) => x.id !== item.id),
+                        );
                       }}
                     >
                       删除
@@ -3120,7 +3640,8 @@ export default function App() {
               </button>
             </div>
             <Notice>
-              隐藏或删除列只影响当前浏览器的列表布局，不会修改原始 PCAP。字段列来自当前索引采集的常用 Wireshark 字段。
+              隐藏或删除列只影响当前浏览器的列表布局，不会修改原始
+              PCAP。字段列来自当前索引采集的常用 Wireshark 字段。
             </Notice>
             <div className="modal-actions">
               <button className="button secondary" onClick={resetColumns}>
@@ -3143,7 +3664,7 @@ export default function App() {
           }
           subtitle={
             sipCompare
-            ? "SIP 头域保留字段对比；SDP 按 Offer/Answer 原始行对齐，新增、删除和修改分开标记。"
+              ? "SIP 头域保留字段对比；SDP 按 Offer/Answer 原始行对齐，新增、删除和修改分开标记。"
               : "逐字段对比当前列表中选中的两个数据包。"
           }
           onClose={() => setModal(null)}
@@ -3151,9 +3672,13 @@ export default function App() {
           <div className="modal-body compare-modal">
             {sipCompare ? (
               sipCompareLoading ? (
-                <div className="details-empty">正在读取两个 SIP 报文的头域和 SDP…</div>
+                <div className="details-empty">
+                  正在读取两个 SIP 报文的头域和 SDP…
+                </div>
               ) : sipCompareError ? (
-                <p className="filter-error" role="alert">{sipCompareError}</p>
+                <p className="filter-error" role="alert">
+                  {sipCompareError}
+                </p>
               ) : sipCompareDetails ? (
                 (() => {
                   const left = sipComparisonFields(sipCompareDetails.left),
@@ -3163,16 +3688,23 @@ export default function App() {
                     <>
                       <div className="sip-compare-packets">
                         <div className="sip-compare-packet-card is-offer">
-                          <span className="sip-compare-packet-label">报文 A · Offer</span>
+                          <span className="sip-compare-packet-label">
+                            报文 A · Offer
+                          </span>
                           <strong>#{comparePackets[0].no}</strong>
                           <code>{comparePackets[0].info}</code>
                         </div>
-                        <div className="sip-compare-transition" aria-hidden="true">
+                        <div
+                          className="sip-compare-transition"
+                          aria-hidden="true"
+                        >
                           <ArrowRight size={16} />
                           <span>协商结果</span>
                         </div>
                         <div className="sip-compare-packet-card is-answer">
-                          <span className="sip-compare-packet-label">报文 B · Answer</span>
+                          <span className="sip-compare-packet-label">
+                            报文 B · Answer
+                          </span>
                           <strong>#{comparePackets[1].no}</strong>
                           <code>{comparePackets[1].info}</code>
                         </div>
@@ -3183,7 +3715,9 @@ export default function App() {
                       />
                       <SipSdpDiffSection diff={sdpDiff} />
                       <Notice>
-                        SDP 只按原始行进行 diff：琥珀色表示修改，绿色表示新增，红色表示删除；行号用于快速定位，不会把 SDP 拆成更细的字段。
+                        SDP 只按原始行进行
+                        diff：琥珀色表示修改，绿色表示新增，红色表示删除；行号用于快速定位，不会把
+                        SDP 拆成更细的字段。
                       </Notice>
                     </>
                   );
@@ -3203,17 +3737,24 @@ export default function App() {
                     const column = columnById.get(id),
                       displayLabel =
                         id === "time"
-                          ? timeFormats.find(([format]) => format === timeFormat)?.[1] || label
+                          ? timeFormats.find(
+                              ([format]) => format === timeFormat,
+                            )?.[1] || label
                           : label,
-                      left = id === "time"
-                        ? formatPacketTime(comparePackets[0], timeFormat)
-                        : columnValue(comparePackets[0], column),
-                      right = id === "time"
-                        ? formatPacketTime(comparePackets[1], timeFormat)
-                        : columnValue(comparePackets[1], column),
+                      left =
+                        id === "time"
+                          ? formatPacketTime(comparePackets[0], timeFormat)
+                          : columnValue(comparePackets[0], column),
+                      right =
+                        id === "time"
+                          ? formatPacketTime(comparePackets[1], timeFormat)
+                          : columnValue(comparePackets[1], column),
                       different = String(left ?? "") !== String(right ?? "");
                     return (
-                      <div className={`compare-row ${different ? "is-different" : ""}`} key={id}>
+                      <div
+                        className={`compare-row ${different ? "is-different" : ""}`}
+                        key={id}
+                      >
                         <span>{displayLabel}</span>
                         <code>{String(left ?? "—")}</code>
                         <code>{String(right ?? "—")}</code>
@@ -3221,11 +3762,16 @@ export default function App() {
                     );
                   })}
                 </div>
-                <Notice>高亮字段表示两个数据包的摘要值不同；右键协议详情仍可继续查看完整字段树。</Notice>
+                <Notice>
+                  高亮字段表示两个数据包的摘要值不同；右键协议详情仍可继续查看完整字段树。
+                </Notice>
               </>
             )}
             <div className="modal-actions">
-              <button className="button secondary" onClick={() => setCompareSelection([])}>
+              <button
+                className="button secondary"
+                onClick={() => setCompareSelection([])}
+              >
                 清空选择
               </button>
               <button className="button primary" onClick={() => setModal(null)}>
@@ -3243,7 +3789,10 @@ export default function App() {
           onClose={() => setModal(null)}
         >
           <div className="modal-body traffic-timeline-modal">
-            <div className="traffic-timeline-summary" aria-label="流量时间线摘要">
+            <div
+              className="traffic-timeline-summary"
+              aria-label="流量时间线摘要"
+            >
               <div>
                 <span>数据包</span>
                 <strong>{summary.count.toLocaleString()}</strong>
@@ -3260,12 +3809,18 @@ export default function App() {
                 <span>峰值区间</span>
                 <strong>
                   {sizeLabel(
-                    Math.max(0, ...(summary.activity || []).map((point) => point.bytes)),
+                    Math.max(
+                      0,
+                      ...(summary.activity || []).map((point) => point.bytes),
+                    ),
                   )}
                 </strong>
               </div>
             </div>
-            <section className="traffic-timeline-card" aria-label="完整流量时间线图表">
+            <section
+              className="traffic-timeline-card"
+              aria-label="完整流量时间线图表"
+            >
               <div className="traffic-timeline-card-heading">
                 <div>
                   <strong>完整时间线</strong>
@@ -3276,7 +3831,10 @@ export default function App() {
               <TrafficChart summary={summary} large />
             </section>
             <div className="traffic-timeline-legend">
-              <span><i className="traffic-timeline-legend-swatch" />数据包字节</span>
+              <span>
+                <i className="traffic-timeline-legend-swatch" />
+                数据包字节
+              </span>
               <span>时间刻度随捕获时长自动分布</span>
             </div>
           </div>

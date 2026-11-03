@@ -111,13 +111,22 @@ export function ContextMenu({
           {text}
         </button>
       ))}
-      <button
-        role="menuitem"
-        disabled={!context.condition}
-        onClick={() => action("replace", true)}
-      >
-        仅填入过滤栏，暂不应用
-      </button>
+      {[
+        ["replace", "仅填入过滤栏，暂不应用"],
+        ["exclude", "准备为过滤器：非选中"],
+        ["and", "准备为过滤器：且选中"],
+        ["or", "准备为过滤器：或选中"],
+        ["and-not", "准备为过滤器：且非选中"],
+      ].map(([mode, label]) => (
+        <button
+          key={`prepare-${mode}`}
+          role="menuitem"
+          disabled={!context.condition}
+          onClick={() => action(mode, true)}
+        >
+          {label}
+        </button>
+      ))}
       <button
         role="menuitem"
         disabled={!context.columnField}
@@ -191,17 +200,34 @@ export function ContextMenu({
     </div>
   );
 }
-function FieldNode({ field, depth = 0, active, onSelect, onContext }) {
+function fieldMatches(field, search) {
+  return (
+    `${field.name} ${field.label} ${field.value}`
+      .toLowerCase()
+      .includes(search.toLowerCase()) ||
+    field.fields?.some((f) => fieldMatches(f, search))
+  );
+}
+function FieldNode({
+  field,
+  depth = 0,
+  active,
+  onSelect,
+  onContext,
+  search = "",
+}) {
   const [open, setOpen] = useState(
     depth === 0 && ["rtp", "webshark_rtp", "http"].includes(field.name),
   );
   const hasChildren = field.fields?.length > 0;
+  if (search && !fieldMatches(field, search)) return null;
+  const expanded = search ? true : open;
   return (
     <div className="tree-layer">
       <button
         className={`tree-row ${active === field ? "field-selected" : ""}`}
         style={{ paddingLeft: depth * 12 + 4 }}
-        aria-expanded={hasChildren ? open : undefined}
+        aria-expanded={hasChildren ? expanded : undefined}
         title={field.label}
         onClick={() => {
           if (hasChildren) setOpen(!open);
@@ -214,7 +240,7 @@ function FieldNode({ field, depth = 0, active, onSelect, onContext }) {
         }}
       >
         {hasChildren ? (
-          open ? (
+          expanded ? (
             <ChevronDown size={12} />
           ) : (
             <ChevronRight size={12} />
@@ -224,7 +250,8 @@ function FieldNode({ field, depth = 0, active, onSelect, onContext }) {
         )}
         <span>{field.label || `${field.name}: ${field.value}`}</span>
       </button>
-      {open &&
+      {expanded &&
+        hasChildren &&
         field.fields.map((child, i) => (
           <FieldNode
             key={`${child.name}-${i}`}
@@ -233,6 +260,7 @@ function FieldNode({ field, depth = 0, active, onSelect, onContext }) {
             active={active}
             onSelect={onSelect}
             onContext={onContext}
+            search={search}
           />
         ))}
     </div>
@@ -251,6 +279,7 @@ export default function PacketInspector({
   marked,
 }) {
   const [tab, setTab] = useState("fields"),
+    [search, setSearch] = useState(""),
     [mode, setMode] = useState("hex"),
     [active, setActive] = useState(null);
   useEffect(() => setActive(null), [packet?.no, detail]);
@@ -292,6 +321,18 @@ export default function PacketInspector({
             />
           </div>
         </div>
+        <div className="batch-toolbar">
+          <label>
+            包内字段搜索{" "}
+            <input
+              aria-label="包内字段搜索"
+              style={{ width: 180 }}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          <button onClick={() => setSearch("")}>清除</button>
+        </div>
         {tab === "notes" && packet ? (
           <PacketNote
             key={`${captureId}-${packet.no}`}
@@ -309,6 +350,7 @@ export default function PacketInspector({
                 key={`${packet.no}-${f.name}-${i}`}
                 field={f}
                 active={active}
+                search={search}
                 onSelect={setActive}
                 onContext={(e, field) =>
                   onContext({
