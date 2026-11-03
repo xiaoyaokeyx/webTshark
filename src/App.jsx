@@ -1967,7 +1967,7 @@ export default function App() {
                     <div>
                       <strong>ASR 关联过滤</strong>
                       <span>
-                        {relation.matches.length} 个 SIP 会话 · {relation.matches.reduce((count, item) => count + item.mrcpPackets, 0)} 个 MRCP · {relation.matches.reduce((count, item) => count + item.rtpPackets, 0)} 个 RTP
+                        {relation.matches.length} 个 SIP 会话 · {relation.matches.reduce((count, item) => count + item.mrcpPackets, 0)} 个 MRCP · {relation.matches.reduce((count, item) => count + item.rtpPackets, 0)} 个 RTP · {relation.matches.reduce((count, item) => count + (item.rtcpPackets || 0), 0)} 个 RTCP
                       </span>
                     </div>
                     <div className="filter-relation-meta">

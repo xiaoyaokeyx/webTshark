@@ -70,3 +70,36 @@ test("Call-ID separates calls sharing one UDP stream and retains proxy hops", ()
     500,
   );
 });
+
+test("authentication retries and successful fork branches are not marked as failed", () => {
+  const authenticated = buildSipCalls([
+    packet(1, 0, "auth", "A", "B", "INVITE sip:b"),
+    packet(2, 0.1, "auth", "B", "A", "401 Unauthorized"),
+    packet(3, 0.2, "auth", "A", "B", "INVITE sip:b"),
+    packet(4, 0.3, "auth", "B", "A", "200 OK"),
+    packet(5, 0.4, "auth", "A", "B", "ACK", "ACK"),
+  ]);
+  assert.equal(authenticated[0].status, "已接通");
+  assert.equal(authenticated[0].diagnostics.authChallenges, 1);
+  assert.equal(authenticated[0].diagnostics.inviteAttempts, 2);
+  assert.equal(authenticated[0].diagnostics.connectedMs, 300);
+
+  const forked = buildSipCalls([
+    packet(1, 0, "fork", "A", "B", "INVITE sip:b"),
+    packet(2, 0.1, "fork", "B", "A", "486 Busy Here"),
+    packet(3, 0.2, "fork", "C", "A", "200 OK"),
+  ]);
+  assert.equal(forked[0].status, "已接通");
+  assert.equal(forked[0].diagnostics.finalCode, 200);
+});
+
+test("a failed re-INVITE does not overwrite an already connected call", () => {
+  const calls = buildSipCalls([
+    packet(1, 0, "reinvite", "A", "B", "INVITE sip:b"),
+    packet(2, 0.1, "reinvite", "B", "A", "200 OK"),
+    packet(3, 0.2, "reinvite", "A", "B", "ACK", "ACK"),
+    packet(4, 1, "reinvite", "A", "B", "INVITE sip:b"),
+    packet(5, 1.1, "reinvite", "B", "A", "488 Not Acceptable Here"),
+  ]);
+  assert.equal(calls[0].status, "已接通");
+});

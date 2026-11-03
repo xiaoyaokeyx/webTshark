@@ -275,6 +275,147 @@ export function streamFilter(s) {
   const family = isIP(s.source) === 6 ? "ipv6" : "ip";
   return `${family}.src == ${s.source} && ${family}.dst == ${s.destination} && udp.srcport == ${s.srcPort} && udp.dstport == ${s.dstPort} && rtp.ssrc == ${s.ssrc}`;
 }
+
+// RTP sequence numbers are 16-bit and packets can arrive out of order. Keep
+// the extension and gap accounting in one place so the summary and waveform
+// use the same interpretation.
+export function createSequenceTracker({ retainObservations = true } = {}) {
+  return {
+    initialized: false,
+    highest: 0,
+    segment: 0,
+    ranges: [],
+    observations: [],
+    retainObservations,
+    segments: [],
+    unique: 0,
+    duplicates: 0,
+    reordered: 0,
+  };
+}
+
+function extendSequence(sequence, highest) {
+  let extended = sequence + Math.floor(highest / 65536) * 65536;
+  if (extended < highest - 32768) extended += 65536;
+  else if (extended > highest + 32768) extended -= 65536;
+  return extended;
+}
+
+export function observeSequence(tracker, sequence) {
+  const raw = Number(sequence);
+  if (!Number.isInteger(raw) || raw < 0 || raw > 65535)
+    return { extended: null, segment: tracker.segment, duplicate: false };
+  if (!tracker.initialized) {
+    tracker.initialized = true;
+    tracker.highest = raw;
+    tracker.segments.push({ segment: tracker.segment, ranges: tracker.ranges });
+  }
+  let extended = extendSequence(raw, tracker.highest);
+  const wasBehind = tracker.initialized && extended < tracker.highest;
+  // A very large backwards jump is normally a sender/SSRC restart. Treat it
+  // as a new segment instead of reporting thousands of phantom lost packets.
+  let restarted = false;
+  if (extended < tracker.highest - 4096) {
+    restarted = true;
+    tracker.segment += 1;
+    tracker.highest = raw;
+    tracker.ranges = [];
+    tracker.segments.push({ segment: tracker.segment, ranges: tracker.ranges });
+    extended = raw;
+  }
+  if (wasBehind && !restarted) tracker.reordered += 1;
+  tracker.highest = Math.max(tracker.highest, extended);
+  let index = 0;
+  while (index < tracker.ranges.length && tracker.ranges[index][1] < extended - 1)
+    index += 1;
+  const duplicate =
+    Boolean(tracker.ranges[index]) &&
+    tracker.ranges[index][0] <= extended &&
+    tracker.ranges[index][1] >= extended;
+  if (duplicate) tracker.duplicates += 1;
+  else {
+    tracker.unique += 1;
+    if (tracker.ranges[index] && tracker.ranges[index][0] <= extended + 1) {
+      tracker.ranges[index][0] = Math.min(tracker.ranges[index][0], extended);
+      tracker.ranges[index][1] = Math.max(tracker.ranges[index][1], extended);
+    } else tracker.ranges.splice(index, 0, [extended, extended]);
+    if (
+      tracker.ranges[index + 1] &&
+      tracker.ranges[index][1] + 1 >= tracker.ranges[index + 1][0]
+    ) {
+      tracker.ranges[index][1] = Math.max(
+        tracker.ranges[index][1],
+        tracker.ranges[index + 1][1],
+      );
+      tracker.ranges.splice(index + 1, 1);
+    }
+  }
+  const observation = { extended, segment: tracker.segment, duplicate };
+  const current = tracker.segments.at(-1);
+  if (duplicate) current.duplicates += 1;
+  else current.unique += 1;
+  if (wasBehind && !restarted) current.reordered = (current.reordered || 0) + 1;
+  if (tracker.retainObservations) tracker.observations.push(observation);
+  return observation;
+}
+
+export function finishSequenceTracker(tracker) {
+  if (!tracker.retainObservations) {
+    let lost = 0;
+    for (const segment of tracker.segments) {
+      const ranges = segment.ranges || [];
+      for (let index = 1; index < ranges.length; index += 1)
+        lost += Math.max(0, ranges[index][0] - ranges[index - 1][1] - 1);
+    }
+    return {
+      lost,
+      duplicates: tracker.duplicates,
+      reordered: tracker.reordered,
+      unique: tracker.unique,
+      observations: [],
+    };
+  }
+  const bySegment = new Map();
+  for (const item of tracker.observations) {
+    const list = bySegment.get(item.segment) || [];
+    list.push(item);
+    bySegment.set(item.segment, list);
+  }
+  const gapByKey = new Map();
+  let lost = 0;
+  for (const items of bySegment.values()) {
+    const unique = [...new Set(items.filter((item) => !item.duplicate).map((item) => item.extended))]
+      .sort((a, b) => a - b);
+    let previous = null;
+    for (const extended of unique) {
+      const gap = previous == null ? 0 : Math.max(0, extended - previous - 1);
+      lost += gap;
+      gapByKey.set(`${items[0].segment}:${extended}`, gap);
+      previous = extended;
+    }
+  }
+  return {
+    lost,
+    duplicates: tracker.duplicates,
+    reordered: tracker.reordered,
+    unique: tracker.unique,
+    observations: tracker.observations.map((item) => ({
+      ...item,
+      lostBefore: item.duplicate ? 0 : gapByKey.get(`${item.segment}:${item.extended}`) || 0,
+    })),
+  };
+}
+
+export function extendTimestamp(previousExtended, previousRaw, raw) {
+  const value = Number(raw) >>> 0;
+  if (!Number.isFinite(previousExtended) || !Number.isFinite(previousRaw))
+    return { extended: value, restarted: false };
+  const delta = (value - (Number(previousRaw) >>> 0)) | 0;
+  const backwards = (Number(previousRaw) >>> 0) - value;
+  if (Math.abs(delta) > 0x40000000 || (delta < 0 && backwards > 65536))
+    return { extended: value, restarted: true };
+  return { extended: previousExtended + delta, restarted: false };
+}
 export function decodeG711(byte, codec) {
   if (codec === "PCMU") {
     const b = ~byte & 255;

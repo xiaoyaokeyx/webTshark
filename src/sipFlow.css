@@ -263,6 +263,13 @@
   border-color: #efd6d2;
   background: #fff6f5;
 }
+.voip-call-diagnostic {
+  display: block;
+  margin-top: 4px;
+  color: var(--voip-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
 .voip-only {
   color: var(--voip-blue);
   font-size: 11px;

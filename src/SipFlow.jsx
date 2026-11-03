@@ -633,6 +633,16 @@ export default function SipFlow({
                           {call.status === "已结束" && <Check size={11} />}
                           {call.status}
                         </span>
+                        <small className="voip-call-diagnostic">
+                          {call.diagnostics?.authChallenges
+                            ? `认证 ${call.diagnostics.authChallenges} 次`
+                            : ""}
+                          {call.diagnostics?.connectedMs != null
+                            ? ` · 接通 ${call.diagnostics.connectedMs.toFixed(0)} ms`
+                            : call.diagnostics?.finalCode
+                              ? ` · 最终 ${call.diagnostics.finalCode}`
+                              : ""}
+                        </small>
                       </td>
                       <td>
                         <button

@@ -1012,6 +1012,7 @@ export default function RtpPanel({
                   <th>数据包</th>
                   <th>估算丢包</th>
                   <th>最大抖动</th>
+                  <th>乱序 / 重启</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -1056,6 +1057,14 @@ export default function RtpPanel({
                       {s.maxJitter == null
                         ? "—"
                         : `${s.maxJitter.toFixed(2)} ms`}
+                    </td>
+                    <td>
+                      <span className={s.reordered ? "warning-text" : ""}>
+                        {s.reordered || 0}
+                      </span>
+                      <small className="block-small">
+                        时间戳重启 {s.timestampRestarts || 0}
+                      </small>
                     </td>
                     <td>
                       <div className="media-actions">

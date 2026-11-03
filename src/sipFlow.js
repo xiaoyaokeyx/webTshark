@@ -64,19 +64,47 @@ export function buildSipCalls(packets) {
     const messages = call.packets.map(sipMessage);
     const has = (method) =>
       messages.some((m) => !m.code && m.method === method);
-    const status = has("CANCEL")
-      ? "已取消"
-      : messages.some((m) => m.code >= 300 && m.method === "INVITE")
-        ? "呼叫失败"
-        : has("BYE")
-          ? "已结束"
-          : messages.some(
-                (m) => m.code >= 200 && m.code < 300 && m.method === "INVITE",
-              )
-            ? "已接通"
-            : messages.some((m) => m.code === 180 || m.code === 183)
-              ? "振铃中"
-              : "建立中";
+    // A Call-ID can contain authentication retries, forks and re-INVITEs.
+    // Only the initial INVITE outcome determines whether call setup failed;
+    // a later 2xx keeps the dialog connected even when another branch or a
+    // re-INVITE returns an error.
+    const inviteResponses = messages.filter(
+      (m) => m.code > 0 && m.method === "INVITE",
+    );
+    const firstInviteIndex = messages.findIndex(
+      (m) => !m.code && m.method === "INVITE",
+    );
+    const firstInviteTime =
+      firstInviteIndex >= 0 ? Number(call.packets[firstInviteIndex].time) : Number(first.time);
+    const responsePackets = call.packets
+      .map((packet, index) => ({ packet, message: messages[index] }))
+      .filter(({ message }) => message.code > 0);
+    const inviteResponsePackets = responsePackets.filter(
+      ({ message }) => message.method === "INVITE",
+    );
+    const connected = inviteResponses.some(
+      (m) => m.code >= 200 && m.code < 300,
+    );
+    const failedSetup = !connected && inviteResponses.some((m) => m.code >= 300);
+    let status = "建立中";
+    if (connected) status = has("BYE") ? "已结束" : "已接通";
+    else if (has("BYE") && !failedSetup) status = "已结束";
+    else if (has("CANCEL")) status = "已取消";
+    else if (failedSetup) status = "呼叫失败";
+    else if (messages.some((m) => m.code === 180 || m.code === 183))
+      status = "振铃中";
+    const firstResponse = inviteResponsePackets[0];
+    const ringing = inviteResponsePackets.find(
+      ({ message }) => message.code === 180 || message.code === 183,
+    );
+    const connectedResponse = inviteResponsePackets.find(
+      ({ message }) => message.code >= 200 && message.code < 300,
+    );
+    const finalResponses = inviteResponsePackets.filter(
+      ({ message }) => message.code >= 200,
+    );
+    const toTags = new Set(call.packets.map((packet) => packet.fields?.["sip.to.tag"]).filter(Boolean));
+    const fromTags = new Set(call.packets.map((packet) => packet.fields?.["sip.from.tag"]).filter(Boolean));
     return {
       ...call,
       callId:
@@ -90,6 +118,28 @@ export function buildSipCalls(packets) {
         Number(call.packets.at(-1).time) - Number(first.time),
       ),
       status,
+      diagnostics: {
+        inviteAttempts: messages.filter((m) => !m.code && m.method === "INVITE").length,
+        authChallenges: inviteResponsePackets.filter(
+          ({ message }) => message.code === 401 || message.code === 407,
+        ).length,
+        firstResponseMs:
+          firstResponse && Number.isFinite(firstInviteTime)
+            ? Math.max(0, (Number(firstResponse.packet.time) - firstInviteTime) * 1000)
+            : null,
+        ringingMs:
+          ringing && Number.isFinite(firstInviteTime)
+            ? Math.max(0, (Number(ringing.packet.time) - firstInviteTime) * 1000)
+            : null,
+        connectedMs:
+          connectedResponse && Number.isFinite(firstInviteTime)
+            ? Math.max(0, (Number(connectedResponse.packet.time) - firstInviteTime) * 1000)
+            : null,
+        finalCode: finalResponses.at(-1)?.message.code || null,
+        ackSeen: has("ACK"),
+        byeSeen: has("BYE"),
+        forkCount: Math.max(toTags.size, fromTags.size),
+      },
     };
   });
 }
