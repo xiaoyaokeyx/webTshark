@@ -14,6 +14,9 @@ import { once } from "node:events";
 import { join, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
+import { initLuaScripts, luaArgs, luaScriptNames, luaSignature, assertLuaScriptsUnchanged } from "./lua.mjs";
+import { encodeReference, frameReader, selectionPage, indexRecords } from "./index-storage.mjs";
+import { initFilterSession, closeFilterSession, fastFrameNumbers } from "./filter-session.mjs";
 import {
   mappingLua,
   mappingFor,
@@ -48,6 +51,7 @@ export async function run(
   args,
   { capture, timeout = 120000, maxBytes = 16 * 1024 * 1024, onLine } = {},
 ) {
+  await assertLuaScriptsUnchanged();
   await acquire();
   if (capture?.cancelled) {
     release();
@@ -128,7 +132,7 @@ export async function run(
         await new Promise((r) => setTimeout(r, 2));
       finish(
         problem ||
-          (code !== 0
+          (code !== 0 || /Lua:.*(?:error|failed)/i.test(stderr)
             ? new Error(
                 capture?.cancelled
                   ? "分析任务已取消"
@@ -140,13 +144,17 @@ export async function run(
   });
 }
 export function stopAll() {
+  closeFilterSession();
   for (const proc of running) proc.kill("SIGKILL");
 }
 let fieldTypes = new Map();
 let fieldNames = [];
 export let engineVersion = "";
+export let engineSignature = "";
 export async function initEngine() {
+  await initLuaScripts();
   engineVersion = (await run(["--version"])).split("\n")[0];
+  engineSignature = createHash("sha256").update("index-schema-2:").update(engineVersion).update(luaSignature).digest("hex");
   const probe = await mkdtemp(join(tmpdir(), "webtshark-probe-"));
   try {
     const pcap = Buffer.alloc(24);
@@ -158,6 +166,7 @@ export async function initEngine() {
     await writeFile(join(probe, "empty.pcap"), pcap);
     await writeFile(join(probe, "mapping.lua"), mappingLua({ mappings: [] }));
     await run([
+      ...luaArgs(),
       "-r",
       join(probe, "empty.pcap"),
       "-X",
@@ -167,6 +176,45 @@ export async function initEngine() {
       "-e",
       "webshark.rtp.codec",
     ]);
+    // TShark 4.2's -G fields exits before parsing -X. Query built-ins first,
+    // then discover Lua fields through the public Field API in an empty capture.
+    const fields = await run(["-G", "fields"], { maxBytes: 80 * 1024 * 1024 });
+    fieldTypes.clear();
+    for (const line of fields.split("\n")) {
+      const cells = line.split("\t");
+      if (cells[0] === "F") fieldTypes.set(cells[2], cells[3]);
+    }
+    if (luaScriptNames().length) {
+      const registry = join(probe, "registry.lua");
+      const probeArgs = [...luaArgs(), "-X", `lua_script:${registry}`, "-r", join(probe, "empty.pcap"), "-q"];
+      await writeFile(registry, `local p=Proto("webtshark_registry_probe","WebTshark field registry")
+local emitted=false
+function p.init()
+  if emitted then return end
+  emitted=true
+  for _,name in ipairs(Field.list()) do io.write("WEBTSHARK_FIELD\\t"..name.."\\n") end
+end
+`);
+      const names = [...new Set((await run(probeArgs, { maxBytes: 32 * 1024 * 1024 }))
+        .split("\n").filter((line) => line.startsWith("WEBTSHARK_FIELD\t"))
+        .map((line) => line.slice(16)).filter((name) => !fieldTypes.has(name)))];
+      if (names.length) {
+        const types = [...new Set([...fieldTypes.values()].map((type) => type.replace(/^FT_/, "")))];
+        await writeFile(registry, `local types={}
+for _,name in ipairs({${types.map((name) => JSON.stringify(name)).join(",")}}) do
+  if ftypes[name] then types[ftypes[name]]="FT_"..name end
+end
+for _,name in ipairs({${names.map((name) => JSON.stringify(name)).join(",")}}) do
+  local field=Field.new(name)
+  io.write("WEBTSHARK_TYPE\\t"..name.."\\t"..(types[field.type] or "FT_STRING").."\\n")
+end
+`);
+        for (const line of (await run(probeArgs, { maxBytes: 32 * 1024 * 1024 })).split("\n")) {
+          const [tag, name, type] = line.split("\t");
+          if (tag === "WEBTSHARK_TYPE") fieldTypes.set(name, type);
+        }
+      }
+    }
   } catch (error) {
     throw new Error(
       `TShark Lua 字段注册自检失败；请启用 Lua，并确认运行账户可加载生成脚本。${error.message}`,
@@ -174,16 +222,12 @@ export async function initEngine() {
   } finally {
     await rm(probe, { recursive: true, force: true });
   }
-  const fields = await run(["-G", "fields"], { maxBytes: 80 * 1024 * 1024 });
-  for (const line of fields.split("\n")) {
-    const cells = line.split("\t");
-    if (cells[0] === "F") fieldTypes.set(cells[2], cells[3]);
-  }
   fieldTypes.set("webshark.rtp.codec", "FT_STRING");
   fieldTypes.set("webshark.rtp.clock_rate", "FT_UINT32");
   fieldTypes.set("webshark.rtp.channels", "FT_UINT8");
   fieldTypes.set("webshark.rtp.payload", "FT_BYTES");
   fieldNames = [...fieldTypes.keys()];
+  await initFilterSession(engineVersion);
   return engineVersion;
 }
 export function suggestFields(prefix) {
@@ -257,6 +301,7 @@ const baseFields = [
   "tcp.analysis.zero_window",
 ];
 export async function prepare(capture) {
+  capture.engineSignature = engineSignature;
   await writeFile(
     join(capture.dir, `rtp-${capture.revision}.lua`),
     mappingLua(capture.config),
@@ -265,6 +310,7 @@ export async function prepare(capture) {
 export function argsFor(capture, extraDecodeAs = []) {
   const args = [
     "-n",
+    ...luaArgs(),
     "-r",
     join(capture.dir, "capture.pcap"),
     "-X",
@@ -1453,6 +1499,12 @@ export async function buildIndex(
   requestedFields = [],
 ) {
   if (filter.length > 4096) throw new Error("显示过滤器最长 4096 个字符");
+  const fields = [...new Set([...baseFields, ...requestedFields])].filter(
+    (f) => f.startsWith("_ws.col.") || fieldTypes.has(f),
+  );
+  if (filter && !extraDecodeAs.length && capture.index &&
+      fields.every((field) => capture.index.fields?.includes(field)))
+    return buildSelectionIndex(capture, filter, fields);
   const hash = createHash("sha256")
     .update(`${capture.revision}:${filter}`)
     .digest("hex")
@@ -1467,31 +1519,14 @@ export async function buildIndex(
     Number(process.env.INDEX_SEGMENT_BYTES) || 50 * 1024 * 1024,
   );
   let byteOffset = 0;
+  let lastPublished = 0;
   const summary = createSummary();
   const out = createWriteStream(path, { flags: "w" });
   let writeError;
   out.on("error", (e) => {
     writeError = e;
   });
-  const fields = [...new Set([...baseFields, ...requestedFields])].filter(
-    (f) => f.startsWith("_ws.col.") || fieldTypes.has(f),
-  );
-  // Let TShark evaluate arbitrary display filters, but reuse already decoded
-  // records when the decoding configuration and requested fields are unchanged.
-  const sourceIndex =
-    filter &&
-    !extraDecodeAs.length &&
-    capture.index &&
-    fields.every((field) => capture.index.fields?.includes(field))
-      ? capture.index
-      : null;
-  const source = sourceIndex
-    ? createReadStream(sourceIndex.path, { encoding: "utf8" })
-    : null;
-  const sourceReader = source
-    ? createInterface({ input: source, crlfDelay: Infinity })
-    : null;
-  const records = sourceReader?.[Symbol.asyncIterator]();
+  const started = performance.now();
   try {
     await run(
       [
@@ -1503,34 +1538,14 @@ export async function buildIndex(
         "occurrence=f",
         "-E",
         "escape=y",
-        ...(sourceIndex
-          ? ["-e", "frame.number"]
-          : fields.flatMap((f) => ["-e", f])),
+        ...fields.flatMap((f) => ["-e", f]),
       ],
       {
         capture,
         timeout: Number(process.env.PARSE_TIMEOUT_MS) || 600000,
         onLine: async (line) => {
           if (!line.trim()) return;
-          let p;
-          if (records) {
-            const no = Number(line.trim());
-            if (!Number.isInteger(no) || no < 1)
-              throw new Error("无效的过滤包号");
-            while (true) {
-              const next = await records.next();
-              if (next.done) throw new Error("过滤结果与原始索引不一致");
-              // The writer puts the frame number first. Skip nonmatching rows
-              // without parsing their potentially large protocol field objects.
-              const frame = /^\{"no":(\d+),/.exec(next.value);
-              if (frame && Number(frame[1]) < no) continue;
-              p = JSON.parse(next.value);
-              if (p.no >= no) break;
-            }
-            if (p.no !== no) throw new Error("过滤结果与原始索引不一致");
-          } else {
-            p = parsePacket(line, fields, capture.config);
-          }
+          const p = parsePacket(line, fields, capture.config);
           if (!p.no) return;
           updateSummary(summary, p);
           const record = JSON.stringify(p) + "\n";
@@ -1539,26 +1554,34 @@ export async function buildIndex(
           byteOffset += Buffer.byteLength(record);
           if (summary.count % 100 === 0) offsets.push(byteOffset);
           if (progress) capture.processed = summary.count;
-          if (progress && byteOffset - segmentStart >= segmentBytes) {
+          const completedSegment = byteOffset - segmentStart >= segmentBytes;
+          // Publish the first page immediately, independently of segment size.
+          if (progress && (completedSegment || summary.count === 100 ||
+              (summary.count > 100 && performance.now() - lastPublished >= 250))) {
             await new Promise((resolve, reject) =>
               out.write("", (error) => (error ? reject(error) : resolve())),
             );
-            segments.push({
+            if (completedSegment) {
+              segments.push({
               first: segmentFirst,
               last: p.no,
               start: segmentStart,
               end: byteOffset,
               status: "ready",
-            });
-            segmentStart = byteOffset;
-            segmentFirst = p.no + 1;
-            capture.segments = [...segments];
+              });
+              segmentStart = byteOffset;
+              segmentFirst = p.no + 1;
+              capture.segments = [...segments];
+            }
+            lastPublished = performance.now();
+            capture.firstPageMs ??= lastPublished - started;
             capture.partialIndex = {
               path,
               offsets: [...offsets],
               count: summary.count,
               bytes: byteOffset,
               fields,
+              summary: { bytes: summary.bytes },
             };
           }
         },
@@ -1585,14 +1608,52 @@ export async function buildIndex(
       summary: finishSummary(summary),
       count: summary.count,
       bytes: byteOffset,
+      buildMs: performance.now() - started,
     };
   } catch (e) {
     out.destroy();
     await rm(path, { force: true });
     throw e;
+  }
+}
+
+async function buildSelectionIndex(capture, filter, fields) {
+  const path = join(capture.dir, `selection-${randomUUID()}.bin`);
+  const output = createWriteStream(path);
+  let reader, writeError, lastNo = 0;
+  const summary = createSummary(), started = performance.now();
+  output.on("error", (error) => { writeError = error; });
+  try {
+    reader = await frameReader(capture.index);
+    const append = async (line) => {
+      if (!line.trim()) return;
+      const no = Number(line.trim());
+      if (no <= lastNo) throw new Error("过滤包号顺序无效");
+      lastNo = no;
+      const row = await reader.get(no);
+      updateSummary(summary, row.record);
+      if (writeError) throw writeError;
+      if (!output.write(encodeReference(row))) await once(output, "drain");
+    };
+    const frames = await fastFrameNumbers(capture, filter);
+    if (frames) {
+      for (const no of frames) await append(String(no));
+    } else {
+      await run([...argsFor(capture), "-Y", filter, "-T", "fields", "-e", "frame.number"], {
+        capture, timeout: Number(process.env.PARSE_TIMEOUT_MS) || 600000, onLine: append,
+      });
+    }
+    output.end();
+    await once(output, "finish");
+    return { path, sourcePath: capture.index.path, kind: "selection", fields,
+      count: summary.count, bytes: summary.count * 16, summary: finishSummary(summary),
+      buildMs: performance.now() - started, filterEngine: frames ? "sharkd" : "tshark" };
+  } catch (error) {
+    output.destroy();
+    await rm(path, { force: true });
+    throw error;
   } finally {
-    sourceReader?.close();
-    source?.destroy();
+    await reader?.close();
   }
 }
 export async function getIndex(
@@ -1630,21 +1691,11 @@ export async function getIndex(
     return cached;
   }
   // Each query is a bounded disk index, rather than all packet objects held in browser or Node memory.
-  if (capture.queries.size >= 4) {
+  const cacheLimit = Math.max(1, Math.min(64, Number(process.env.QUERY_CACHE_LIMIT) || 16));
+  if (capture.queries.size >= cacheLimit) {
     const [key, value] = capture.queries.entries().next().value;
     capture.queries.delete(key);
-    Promise.resolve(value)
-      .then((i) => {
-        const timer = setTimeout(() => {
-          rm(i.path, { force: true }).catch(() => {});
-          for (const sorted of i.sorted?.values?.() || [])
-            Promise.resolve(sorted)
-              .then((item) => rm(item.path, { force: true }))
-              .catch(() => {});
-        }, 60000);
-        timer.unref();
-      })
-      .catch(() => {});
+    retireQuery(value);
   }
   const snapshot = { ...capture };
   const promise = buildIndex(
@@ -1653,13 +1704,36 @@ export async function getIndex(
     false,
     extraDecodeAs,
     requestedFields,
-  ).catch((e) => {
+  ).then((index) => {
+    promise.cachedBytes = index.bytes;
+    const budget = Math.max(1024 * 1024, Number(process.env.QUERY_CACHE_BYTES) || 256 * 1024 * 1024);
+    let used = [...capture.queries.values()].reduce((sum, item) => sum + (item.cachedBytes || 0), 0);
+    for (const [key, value] of capture.queries) {
+      if (used <= budget || capture.queries.size <= 1) break;
+      if (!value.cachedBytes || value === promise) continue;
+      capture.queries.delete(key);
+      used -= value.cachedBytes;
+      retireQuery(value);
+    }
+    return index;
+  }).catch((e) => {
     if (capture.queries.get(queryKey) === promise)
       capture.queries.delete(queryKey);
     throw e;
   });
   capture.queries.set(queryKey, promise);
   return promise;
+}
+function retireQuery(value) {
+  Promise.resolve(value).then((index) => {
+    // Allow already-started pagination/report requests to finish.
+    const timer = setTimeout(() => {
+      rm(index.path, { force: true }).catch(() => {});
+      for (const sorted of index.sorted?.values?.() || [])
+        Promise.resolve(sorted).then((item) => rm(item.path, { force: true })).catch(() => {});
+    }, 60000);
+    timer.unref();
+  }).catch(() => {});
 }
 function sortFieldValue(record, field) {
   if (field === "frame.number") return record.no;
@@ -1715,8 +1789,6 @@ async function buildSortedIndex(index, field, direction) {
   const chunkSize = 20000;
   const chunks = [];
   let chunk = [];
-  const input = createReadStream(index.path, { encoding: "utf8" });
-  const reader = createInterface({ input, crlfDelay: Infinity });
   const flushChunk = async () => {
     if (!chunk.length) return;
     chunk.sort((a, b) => compareSortEntries(a, b, direction));
@@ -1729,19 +1801,14 @@ async function buildSortedIndex(index, field, direction) {
     chunk = [];
   };
   try {
-    for await (const line of reader) {
-      if (!line.trim()) continue;
-      try {
-        const record = JSON.parse(line);
+    for await (const record of indexRecords(index)) {
         chunk.push({ record, value: sortFieldValue(record, field) });
         if (chunk.length >= chunkSize) await flushChunk();
-      } catch {
-        // Ignore a partially written/corrupt index record; the normal reader does the same.
-      }
     }
     await flushChunk();
-  } finally {
-    input.destroy();
+  } catch (error) {
+    await Promise.all(chunks.map((path) => rm(path, { force: true })));
+    throw error;
   }
   const outputPath = join(dirname(index.path), `.sorted-${randomUUID()}.jsonl`);
   const output = createWriteStream(outputPath, { flags: "w" });
@@ -1795,6 +1862,8 @@ async function buildSortedIndex(index, field, direction) {
     await once(output, "finish");
     return {
       ...index,
+      kind: "jsonl",
+      sourcePath: undefined,
       path: outputPath,
       offsets,
       bytes,
@@ -1843,6 +1912,7 @@ export async function pageFromIndex(
   const start = page * pageSize;
   if (start >= index.count) return [];
   const end = Math.min(index.count, start + pageSize);
+  if (index.kind === "selection") return selectionPage(index, start, end - start);
   // The JSONL index stores byte offsets every 100 records. For larger or
   // custom page sizes, read the smallest enclosing 100-record range and
   // slice by record position so filtered captures remain correctly paged.
@@ -2173,7 +2243,7 @@ async function packetDetailDecoder(capture, no) {
     needsNativeDissector = capture.config.mappings.some(
       (mapping) => mapping.codec === "OPUS",
     ),
-    canIsolate = packet?.transport === "UDP";
+    canIsolate = packet?.transport === "UDP" && !luaScriptNames().length;
   // JSON output is faster and contains raw bytes, but TShark's JSON object
   // shape collapses repeated SDP fields and can omit custom Opus dissector
   // fields. Keep PDML for those protocol cases so the detail tree stays exact.

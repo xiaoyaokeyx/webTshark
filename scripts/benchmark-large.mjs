@@ -8,6 +8,8 @@ import {
   buildIndex,
   pageFromIndex,
   engineVersion,
+  getIndex,
+  stopAll,
 } from "../server/engine.mjs";
 const mb = Number(process.argv[2] || 200);
 if (!Number.isFinite(mb) || mb < 1 || mb > 2048)
@@ -63,17 +65,31 @@ const elapsedMs = performance.now() - started,
   page = await pageFromIndex(index, Math.floor((index.count - 1) / 100), 100);
 if (index.count !== packets)
   throw new Error(`packet count ${index.count} != ${packets}`);
+const lastPageMs = performance.now() - pageStart;
+c.index = index;
+const filters = [];
+for (const filter of ["udp", "frame.number == 100", "frame.number > 999999999"]) {
+  const begin = performance.now();
+  const selection = await getIndex(c, filter);
+  const elapsed = performance.now() - begin;
+  const cached = performance.now();
+  await pageFromIndex(await getIndex(c, filter));
+  filters.push({ filter, count: selection.count, elapsedMs: elapsed, cachePageMs: performance.now() - cached, indexBytes: selection.bytes });
+}
 const result = {
   tshark: engineVersion,
   inputBytes: bytes,
   packets,
   elapsedMs,
-  lastPageMs: performance.now() - pageStart,
+  firstPageMs: c.firstPageMs,
+  lastPageMs,
   lastPageCount: page.length,
   indexBytes: index.bytes,
   segments: c.segments.length,
   nodePeakRss: peak,
+  filters,
   note: "重复的合成 RTP 数据，仅测流式索引/分页；不代表真实 SIP/TCP 重组性能。RSS 不包括 TShark 子进程。",
 };
 await writeFile(join(dir, "benchmark.json"), JSON.stringify(result, null, 2));
 console.log(JSON.stringify({ ...result, directory: dir }, null, 2));
+stopAll();

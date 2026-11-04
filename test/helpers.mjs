@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-export async function startTestServer() {
+export async function startTestServer(env = {}) {
   const dir = await mkdtemp(join(tmpdir(), "webshark-http-"));
   const probe = createServer();
   await new Promise((r) => probe.listen(0, "127.0.0.1", r));
@@ -11,7 +11,7 @@ export async function startTestServer() {
   await new Promise((r) => probe.close(r));
   const child = spawn(process.execPath, ["server/index.mjs"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), DATA_DIR: dir },
+    env: { ...process.env, PORT: String(port), DATA_DIR: dir, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let log = "";

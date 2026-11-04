@@ -16,6 +16,7 @@ import { Transform } from "node:stream";
 import {
   initEngine,
   engineVersion,
+  engineSignature,
   prepare,
   buildIndex,
   getIndex,
@@ -29,9 +30,12 @@ import {
   resolveFilter,
   stopAll,
 } from "./engine.mjs";
+import { luaScriptNames } from "./lua.mjs";
+import { filterSessionStatus } from "./filter-session.mjs";
 import { validateConfig, codecs } from "./rtp.mjs";
 import { buildDemoPcap } from "./fixtures.mjs";
 import { buildCapture } from "../src/compose.js";
+import { detectCaptureFormat } from "../src/captureFormat.js";
 import {
   diagnose,
   reportHtml,
@@ -73,11 +77,13 @@ function snapshot(c) {
     demoVersion: c.demoVersion || null,
     logs: c.logs || [],
     segments: c.segments || [],
+    firstPageMs: c.firstPageMs ?? null,
   };
 }
 async function save(c) {
   const data = snapshot(c);
-  if (c.index) data.index = { ...c.index };
+  data.engineSignature = c.engineSignature;
+  if (c.index) data.index = { ...c.index, sorted: undefined };
   await writeFile(join(c.dir, "manifest.json"), JSON.stringify(data));
 }
 for (const name of await readdir(dataRoot)) {
@@ -94,7 +100,10 @@ for (const name of await readdir(dataRoot)) {
       processes: new Set(),
       cancelled: false,
     };
-    if (c.index) await stat(c.index.path);
+    if (c.index) {
+      await stat(c.index.path);
+      delete c.index.sorted;
+    }
     if (["indexing", "queued", "paused", "uploading"].includes(c.status)) {
       c.status = "cancelled";
       c.error = "服务重启，任务已停止；可重试。";
@@ -160,7 +169,7 @@ function drainJobs() {
   }
 }
 async function analyze(c, config = c.config) {
-  const previous = { config: c.config, index: c.index, revision: c.revision };
+  const previous = { config: c.config, index: c.index, revision: c.revision, engineSignature: c.engineSignature };
   c.status = "indexing";
   log(c, "开始解析：保留完整 TCP/SIP 重组上下文，流式写入分段索引");
   c.error = null;
@@ -168,6 +177,7 @@ async function analyze(c, config = c.config) {
   c.processed = 0;
   c.segments = [];
   c.partialIndex = null;
+  c.firstPageMs = null;
   c.config = config;
   c.revision++;
   c.queries.clear();
@@ -176,21 +186,25 @@ async function analyze(c, config = c.config) {
     await prepare(c);
     const index = await buildIndex(c, "", true);
     c.index = index;
-    c.status = "ready";
+    c.partialIndex = index;
     log(c, `解析完成：${index.count} 包`);
-    await save(c);
+    await save({ ...c, status: "ready" });
+    c.partialIndex = null;
+    c.status = "ready";
   } catch (e) {
-    if (previous.index && !c.cancelled) {
+    let terminalStatus;
+    if (previous.index && previous.engineSignature === engineSignature && !c.cancelled) {
       Object.assign(c, previous);
-      c.status = "ready";
+      terminalStatus = "ready";
       c.error = `设置未生效，已恢复上次结果：${e.message}`;
     } else {
-      c.status = c.cancelled ? "cancelled" : "error";
+      terminalStatus = c.cancelled ? "cancelled" : "error";
       c.error = e.message;
     }
-    await save(c).catch(() => {});
+    await save({ ...c, status: terminalStatus }).catch(() => {});
     log(c, `任务停止：${c.error}`);
     c.partialIndex = null;
+    c.status = terminalStatus;
   }
 }
 async function newCapture(name, demo = false) {
@@ -287,6 +301,10 @@ function requestGuard(req) {
       throw Object.assign(new Error("不允许的跨站请求"), { status: 403 });
   }
 }
+// Rebuild saved results when the TShark version or configured Lua files changed.
+for (const c of captures.values())
+  if (!engineError && c.status === "ready" && (luaScriptNames().length || c.engineSignature !== engineSignature))
+    schedule(c);
 const server = http.createServer(async (req, res) => {
   try {
     requestGuard(req);
@@ -301,6 +319,8 @@ const server = http.createServer(async (req, res) => {
         node: process.version,
         maxUpload,
         codecs,
+        luaScripts: luaScriptNames(),
+        filterSession: filterSessionStatus(),
       });
     if (parts[0] === "api") {
       if (url.pathname === "/api/fields")
@@ -393,8 +413,6 @@ const server = http.createServer(async (req, res) => {
         const name = decodeURIComponent(
           req.headers["x-file-name"] || "capture.pcap",
         );
-        if (!/\.(pcapng|pcap|cap)$/i.test(name))
-          throw new Error("支持 PCAP、PCAPNG、CAP 文件");
         if (Number(req.headers["content-length"]) > maxUpload)
           throw Object.assign(new Error(`文件超过上限 ${maxUpload} 字节`), {
             status: 413,
@@ -402,10 +420,13 @@ const server = http.createServer(async (req, res) => {
         const c = await newCapture(name);
         try {
           let size = 0;
+          let header = Buffer.alloc(0);
           const meter = new Transform({
             transform(chunk, enc, cb) {
               size += chunk.length;
               c.size = size;
+              if (header.length < 32)
+                header = Buffer.concat([header, chunk]).subarray(0, 32);
               cb(
                 size > maxUpload ? new Error("文件超过上传限制") : null,
                 chunk,
@@ -417,7 +438,12 @@ const server = http.createServer(async (req, res) => {
             meter,
             createWriteStream(join(c.dir, "capture.pcap"), { mode: 0o600 }),
           );
-          if (size < 24) throw new Error("文件过短，不是有效抓包");
+          const format = detectCaptureFormat(header);
+          if (!format)
+            throw Object.assign(
+              new Error("文件头不是受支持的 PCAP 或 PCAPNG 抓包文件"),
+              { status: 400 },
+            );
           schedule(c);
           return json(res, snapshot(c), 202);
         } catch (e) {
@@ -457,14 +483,17 @@ const server = http.createServer(async (req, res) => {
           return json(res, snapshot(c));
         }
         if (action === "progress-packets" && method === "GET") {
-          const partial = c.partialIndex || c.index;
+          const partial = c.status === "ready" ? c.index : c.partialIndex;
           if (!partial)
             return json(res, { packets: [], total: 0, partial: true });
-          const page = Math.max(0, Number(url.searchParams.get("page")) || 0);
+          const page = Math.max(0, Math.floor(Number(url.searchParams.get("page")) || 0));
+          const size = Math.min(1000, Math.max(1, Math.floor(Number(url.searchParams.get("size")) || 100)));
           return json(res, {
-            packets: await pageFromIndex(partial, page, 100),
+            packets: await pageFromIndex(partial, page, size),
             total: partial.count,
-            partial: true,
+            partial: c.status !== "ready",
+            revision: c.revision,
+            bytes: partial.summary?.bytes || 0,
           });
         }
         if (!action && method === "DELETE") {

@@ -63,6 +63,8 @@ import RtpPanel, {
 } from "./RtpPanel.jsx";
 import SipFlow from "./SipFlow.jsx";
 import { FeaturePanel } from "./Enhancements.jsx";
+import ParsingPreview from "./ParsingPreview.jsx";
+import { captureHeaderError } from "./captureFormat.js";
 const nav = [
   ["packets", "数据包分析", Layers3],
   ["sipFlow", "SIP 时序图", PhoneCall],
@@ -665,6 +667,7 @@ export default function App() {
   const [health, setHealth] = useState(null),
     [captures, setCaptures] = useState([]),
     [capture, setCapture] = useState(null),
+    [sipSessionCount, setSipSessionCount] = useState(null),
     [bootError, setBootError] = useState("");
   const [view, setView] = useState("packets"),
     [modal, setModal] = useState(null),
@@ -761,6 +764,8 @@ export default function App() {
     sipCompare =
       comparePackets.length === 2 && comparePackets.every(isSipPacket),
     ready = capture?.status === "ready";
+  const parsing = ["queued", "paused", "indexing"].includes(capture?.status);
+  const packetFocus = view === "packets" && (ready || parsing);
   const title = nav.find(([id]) => id === view)?.[1] || "数据包分析";
   const displayRows = rows;
   useEffect(() => {
@@ -867,6 +872,7 @@ export default function App() {
         : [...tabs, { id: tabId, captureId: c.id, label }],
     );
     setCapture(c);
+    setSipSessionCount(null);
     setRows(c.id === capture?.id ? rows : []);
     setDetail(null);
     setRelation(null);
@@ -1062,6 +1068,7 @@ export default function App() {
   function clearCapture() {
     streamSerial.current++;
     setCapture(null);
+    setSipSessionCount(null);
     setRows([]);
     setDetail(null);
     setRelation(null);
@@ -1312,6 +1319,7 @@ export default function App() {
     }
     historyNavigation.current = false;
     setExpression(value);
+    setSipSessionCount(null);
     setQuery({ filter: value, page: 0 });
     setView("packets");
     setActiveSavedViewId(null);
@@ -1481,18 +1489,20 @@ export default function App() {
     if (activeSavedViewId === id) setActiveSavedViewId(null);
     setToast("已移除保存视图");
   }
-  function acceptFile(file) {
+  async function acceptFile(file) {
     setImportError("");
     if (!file) return;
-    if (!/\.(pcap|pcapng|cap)$/i.test(file.name)) {
-      setImportFile(null);
-      return setImportError("请选择 PCAP、PCAPNG 或 CAP 文件");
-    }
     if (file.size > (health?.maxUpload || 1024 ** 3)) {
       setImportFile(null);
       return setImportError(
         `文件超过 ${sizeLabel(health?.maxUpload)} 上传限制`,
       );
+    }
+    const header = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+    const headerError = captureHeaderError(header);
+    if (headerError) {
+      setImportFile(null);
+      return setImportError(headerError);
     }
     setImportFile(file);
   }
@@ -1772,13 +1782,9 @@ export default function App() {
                 <span>{label}</span>
                 {summary.protocols.find((item) =>
                   /^sip/i.test(String(item.protocol || "")),
-                )?.count > 0 && (
-                  <span className="nav-count">
-                    {
-                      summary.protocols.find((item) =>
-                        /^sip/i.test(String(item.protocol || "")),
-                      ).count
-                    }
+                )?.count > 0 && sipSessionCount != null && (
+                  <span className="nav-count" title="SIP 会话数">
+                    {sipSessionCount}
                   </span>
                 )}
               </button>
@@ -1929,7 +1935,7 @@ export default function App() {
         </div>
       </aside>
       <div
-        className={`main-shell ${ready && view === "packets" ? "packet-focus" : ""}`}
+        className={`main-shell ${packetFocus ? "packet-focus" : ""}`}
       >
         <div
           className="capture-tabs"
@@ -2001,9 +2007,9 @@ export default function App() {
           </div>
         </header>
         <main
-          className={`main-content main-content-${view} ${ready && view === "packets" ? "packet-focus-content" : ""}`}
+          className={`main-content main-content-${view} ${packetFocus ? "packet-focus-content" : ""}`}
         >
-          <WorkbenchTools compact={ready && view === "packets"}>
+          <WorkbenchTools compact={packetFocus}>
             {health?.preview && (
               <a
                 className="button secondary"
@@ -2022,7 +2028,7 @@ export default function App() {
             <button disabled={!ready} onClick={() => setFeature("navigate")}>
               跳转 / 搜索
             </button>
-            {ready && view === "packets" && (
+            {packetFocus && (
               <button onClick={closeCapture}>关闭当前抓包文件</button>
             )}
           </WorkbenchTools>
@@ -2061,7 +2067,7 @@ export default function App() {
                 }}
               >
                 <Plus size={17} />
-                {ready && view === "packets" ? "打开" : "打开抓包文件"}
+                {packetFocus ? "打开" : "打开抓包文件"}
               </button>
             </div>
           </div>
@@ -2177,14 +2183,14 @@ export default function App() {
               )}
             </section>
           )}
-          {["queued", "paused", "indexing"].includes(capture?.status) && (
+          {parsing && (
             <div className="analysis-progress" role="status">
               <LoaderCircle className="spin" size={25} />
               <div>
-                <strong>正在解析抓包</strong>
+                <strong>{capture.status === "paused" ? "解析已暂停" : capture.status === "queued" ? "等待解析" : "正在解析抓包"}</strong>
                 <p>
                   已处理 {capture.processed.toLocaleString()}{" "}
-                  个数据包。解析结果写入本地索引，完成后即可浏览。
+                  个数据包，已就绪的结果可在下方浏览。
                 </p>
               </div>
               <button
@@ -2198,6 +2204,9 @@ export default function App() {
                 取消解析
               </button>
             </div>
+          )}
+          {parsing && (
+            <ParsingPreview key={`${capture.id}:${capture.revision}`} capture={capture} timeFormat={timeFormat} formatTime={formatPacketTime} />
           )}
           {capture && ["error", "cancelled"].includes(capture.status) && (
             <div className="service-error" role="alert">
@@ -2876,6 +2885,7 @@ export default function App() {
                 // current flow view and only sync the selected packet state.
                 setSelectedNo(packet.no);
               }}
+              onSessionCount={setSipSessionCount}
               onOpenPackets={() => apply("sip")}
             />
           )}
@@ -3184,6 +3194,10 @@ export default function App() {
           onOpen={selectCapture}
           onLocate={locatePacket}
           onRefresh={refreshList}
+          onTaskUpdate={(next) => {
+            setCapture((current) => current?.id === next.id ? next : current);
+            setCaptures((items) => items.map((item) => item.id === next.id ? next : item));
+          }}
         />
       )}
       {context && (
@@ -3255,14 +3269,13 @@ export default function App() {
               <strong>将抓包文件拖到这里</strong>
               <span>或点击选择本地文件</span>
               <small>
-                单文件上限 {sizeLabel(health?.maxUpload || 1024 ** 3)}
+                依据文件头识别 PCAP/PCAPNG，文件名后缀不作判断 · 单文件上限 {sizeLabel(health?.maxUpload || 1024 ** 3)}
               </small>
             </button>
             <input
               type="file"
               ref={fileRef}
               className="sr-only"
-              accept=".pcap,.pcapng,.cap"
               onChange={(e) => acceptFile(e.target.files[0])}
             />
             {importFile && (
@@ -3917,6 +3930,10 @@ export default function App() {
               {health?.node || "未知 Node 版本"}
               。服务只读取已导入的文件，不进行实时捕获。
             </Notice>
+            <p><strong>自定义 Lua：</strong>{health?.luaScripts?.length ? health.luaScripts.join("、") : "未配置"}</p>
+            <p>由服务端配置加载 Wireshark Lua 脚本；注册的字段可用于过滤、协议详情及自定义列。修改脚本后需重启服务。</p>
+            <p><strong>常驻过滤加速：</strong>{health?.filterSession?.ready ? "可用（仅默认解码配置的 tcp contains 查询）" : "使用 TShark"}</p>
+            {health?.filterSession?.error && <p className="filter-error">{health.filterSession.error}</p>}
           </div>
         </Modal>
       )}

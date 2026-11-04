@@ -357,6 +357,7 @@ export default function SipFlow({
   onTimeFormatChange,
   formatTime,
   onPacket,
+  onSessionCount,
   onOpenPackets,
 }) {
   const [packets, setPackets] = useState([]),
@@ -444,6 +445,9 @@ export default function SipFlow({
     return () => controller.abort();
   }, [capture.id, capture.revision, expandedPacketNo]);
   const calls = useMemo(() => buildSipCalls(packets), [packets]);
+  useEffect(() => {
+    if (!loading && !error) onSessionCount?.(calls.length);
+  }, [calls.length, error, loading, onSessionCount]);
   const matching = useMemo(
     () =>
       calls.filter((call) =>

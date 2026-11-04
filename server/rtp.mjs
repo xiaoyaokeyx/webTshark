@@ -228,6 +228,7 @@ local rate=ProtoField.uint32("webshark.rtp.clock_rate","RTP clock rate",base.DEC
 local channels=ProtoField.uint8("webshark.rtp.channels","Channels",base.DEC)
 local payload=ProtoField.bytes("webshark.rtp.payload","Mapped payload")
 p.fields={codec,rate,channels,payload}
+${maps.length ? "" : "-- No PT overrides: keep fields registered without a per-packet callback.\ndo return end\n"}
 local get_pt=Field.new("rtp.p_type")
 local get_ssrc=Field.new("rtp.ssrc")
 local get_payload=Field.new("rtp.payload")

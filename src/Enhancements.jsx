@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, capturePath, downloadBlob, uploadCapture } from "./api.js";
 import { Modal, Notice } from "./ui.jsx";
-import { buildCapture, composeDefaults } from "./compose.js";
+import { buildCapture, buildVoipCalls, composeDefaults } from "./compose.js";
 import "./enhancements.css";
 
 export function FeaturePanel({
@@ -13,12 +13,14 @@ export function FeaturePanel({
   onOpen,
   onLocate,
   onRefresh,
+  onTaskUpdate,
   backendReady,
 }) {
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [data, setData] = useState(null);
   const [form, setForm] = useState(composeDefaults),
+    [voipCallCount, setVoipCallCount] = useState(6),
     [a, setA] = useState(capture?.id || ""),
     [b, setB] = useState(
       captures.find((c) => c.id !== capture?.id && c.status === "ready")?.id ||
@@ -32,6 +34,11 @@ export function FeaturePanel({
   async function previewTask(id, page = 0) {
     const result = await api(capturePath(id, `/progress-packets?page=${page}`));
     setData({ ...result, id, page });
+  }
+  async function updateTask(id, action) {
+    const next = await api(capturePath(id, `/${action}`), { method: "POST" });
+    setTasks((items) => items.map((item) => item.id === next.id ? next : item));
+    onTaskUpdate?.(next);
   }
   async function run(fn) {
     setError("");
@@ -214,6 +221,41 @@ export function FeaturePanel({
               序列号。MRCP 使用带应用载荷的 TCP
               包；本功能只生成文件，不发送网络流量。
             </Notice>
+            {['SIP', 'SDP'].includes(form.protocol) && (
+              <div className="multi-call-builder">
+                <label>
+                  VoIP 通话数
+                  <input
+                    type="number"
+                    min="2"
+                    max="64"
+                    value={voipCallCount}
+                    onChange={(e) => setVoipCallCount(e.target.value)}
+                  />
+                </label>
+                <span>每组使用独立 Call-ID，包含接通、忙线、振铃和取消等流程。</span>
+                <button
+                  className="button primary"
+                  disabled={busy || !backendReady}
+                  onClick={() =>
+                    run(async () => {
+                      const count = Number(voipCallCount);
+                      const file = new File(
+                        [buildVoipCalls({ callCount: count })],
+                        `synthetic-${count}-voip-calls.pcap`,
+                        { type: "application/vnd.tcpdump.pcap" },
+                      );
+                      const c = await uploadCapture(file, () => {});
+                      onOpen(c);
+                      onRefresh();
+                      onClose();
+                    })
+                  }
+                >
+                  构造并打开 {voipCallCount} 个 VoIP 通话
+                </button>
+              </div>
+            )}
             <div className="modal-actions">
               <button
                 className="button secondary"
@@ -291,7 +333,7 @@ export function FeaturePanel({
                     <button
                       onClick={() =>
                         run(() =>
-                          api(capturePath(c.id, "/cancel"), { method: "POST" }),
+                          updateTask(c.id, "cancel"),
                         )
                       }
                     >
@@ -302,7 +344,7 @@ export function FeaturePanel({
                       disabled={busy}
                       onClick={() =>
                         run(() =>
-                          api(capturePath(c.id, "/retry"), { method: "POST" }),
+                          updateTask(c.id, "retry"),
                         )
                       }
                     >
@@ -314,13 +356,7 @@ export function FeaturePanel({
                       disabled={busy}
                       onClick={() =>
                         run(() =>
-                          api(
-                            capturePath(
-                              c.id,
-                              c.status === "paused" ? "/resume" : "/pause",
-                            ),
-                            { method: "POST" },
-                          ),
+                          updateTask(c.id, c.status === "paused" ? "resume" : "pause"),
                         )
                       }
                     >

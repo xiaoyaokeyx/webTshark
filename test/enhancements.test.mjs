@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildCapture, checksum } from "../src/compose.js";
+import { buildCapture, buildVoipCalls, checksum } from "../src/compose.js";
 import {
   diagnose,
   compareIndexes,
@@ -99,6 +99,35 @@ test("constructed packets have exact counts, valid IP/transport checksums and MR
   assert.throws(() => buildCapture({ count: 10001 }));
   assert.throws(() => buildCapture({ source: "1.2.3.256" }));
   assert.throws(() => buildCapture({ callId: "x\r\nX: bad" }));
+});
+
+test("multi-call VoIP constructor keeps each SIP dialog independent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "webshark-voip-calls-"));
+  try {
+    const path = join(dir, "multi-call.pcap");
+    await writeFile(path, buildVoipCalls({ callCount: 6 }));
+    const output = await tsharkRun([
+      "-n",
+      "-r",
+      path,
+      "-Y",
+      "sip.Call-ID",
+      "-T",
+      "fields",
+      "-e",
+      "sip.Call-ID",
+    ]);
+    const callIds = new Set(
+      output
+        .split("\n")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    );
+    assert.equal(callIds.size, 6);
+    assert.equal(output.trim().split("\n").filter(Boolean).length, 31);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("diagnostics distinguish capture-limited SIP evidence and escape report data", async () => {

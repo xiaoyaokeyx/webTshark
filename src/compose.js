@@ -29,6 +29,7 @@ export const composeDefaults = {
   payloadSize: 160,
   method: "INVITE",
   callId: "synthetic-call@webtshark.example",
+  callCount: 1,
   channelId: "synthetic@speechrecog",
   body: "",
 };
@@ -45,6 +46,203 @@ function integer(value, min, max, name) {
   if (!Number.isInteger(n) || n < min || n > max)
     throw new Error(`${name} 应为 ${min}–${max} 的整数`);
   return n;
+}
+
+function pcapFromFrames(frames, epoch = 1793664000) {
+  const ordered = [...frames].sort((a, b) => a.time - b.time || a.order - b.order);
+  const output = new Uint8Array(
+    24 + ordered.reduce((sum, frame) => sum + frame.bytes.length + 16, 0),
+  );
+  const view = new DataView(output.buffer);
+  view.setUint32(0, 0xa1b2c3d4, true);
+  view.setUint16(4, 2, true);
+  view.setUint16(6, 4, true);
+  view.setUint32(16, 262144, true);
+  view.setUint32(20, 1, true);
+  let offset = 24;
+  for (const frame of ordered) {
+    const seconds = Math.max(0, Number(frame.time) || 0);
+    view.setUint32(offset, Math.floor(epoch + seconds), true);
+    view.setUint32(offset + 4, Math.round((seconds % 1) * 1e6), true);
+    view.setUint32(offset + 8, frame.bytes.length, true);
+    view.setUint32(offset + 12, frame.bytes.length, true);
+    output.set(frame.bytes, offset + 16);
+    offset += frame.bytes.length + 16;
+  }
+  return output;
+}
+
+function sipUdpFrame(source, destination, payload, identification, sourcePort = 5060) {
+  const src = ip(source),
+    dst = ip(destination),
+    udp = [
+      ...u16(sourcePort),
+      ...u16(5060),
+      ...u16(8 + payload.length),
+      0,
+      0,
+      ...payload,
+    ];
+  const pseudo = [...src, ...dst, 0, 17, ...u16(udp.length), ...udp];
+  udp.splice(6, 2, ...u16(checksum(pseudo) || 0xffff));
+  const header = [
+    0x45,
+    0,
+    ...u16(20 + udp.length),
+    ...u16(identification & 0xffff),
+    0x40,
+    0,
+    64,
+    17,
+    0,
+    0,
+    ...src,
+    ...dst,
+  ];
+  header.splice(10, 2, ...u16(checksum(header)));
+  return new Uint8Array([
+    0,
+    17,
+    34,
+    51,
+    68,
+    85,
+    102,
+    119,
+    136,
+    153,
+    170,
+    187,
+    8,
+    0,
+    ...header,
+    ...udp,
+  ]);
+}
+
+function sipDialogMessage({
+  source,
+  destination,
+  callId,
+  branch,
+  fromTag,
+  toTag,
+  event,
+}) {
+  const response = event.code != null;
+  const method = event.method || "INVITE";
+  const cseqMethod = event.cseqMethod || method;
+  const cseq = event.cseq || (cseqMethod === "BYE" ? 2 : 1);
+  const body = event.body || "";
+  const start = response
+    ? `SIP/2.0 ${event.code} ${event.reason}`
+    : `${method} sip:bob@${destination} SIP/2.0`;
+  const headers = [
+    `Via: SIP/2.0/UDP ${source}:5060;branch=${branch}`,
+    "Max-Forwards: 70",
+    `From: <sip:alice@${source}>;tag=${fromTag}`,
+    `To: <sip:bob@${destination}>${toTag ? `;tag=${toTag}` : ""}`,
+    `Call-ID: ${callId}`,
+    `CSeq: ${cseq} ${cseqMethod}`,
+    ...(event.contact
+      ? [`Contact: <sip:bob@${destination}:5060>`]
+      : !response && method !== "CANCEL"
+        ? [`Contact: <sip:alice@${source}:5060>`]
+        : []),
+    ...(body ? ["Content-Type: application/sdp"] : []),
+    `Content-Length: ${enc.encode(body).length}`,
+  ];
+  return enc.encode(`${start}\r\n${headers.join("\r\n")}\r\n\r\n${body}`);
+}
+
+function demoSdp(address, role) {
+  return [
+    "v=0",
+    `o=${role} 1 1 IN IP4 ${address}`,
+    "s=WebShark multi-call demo",
+    `c=IN IP4 ${address}`,
+    "t=0 0",
+    "m=audio 20000 RTP/AVP 0 96",
+    "a=rtpmap:0 PCMU/8000",
+    "a=rtpmap:96 AMR-WB/16000",
+    "a=ptime:20",
+    "a=sendrecv",
+  ].join("\r\n") + "\r\n";
+}
+
+/**
+ * Build several independent SIP dialogs for exercising the VoIP call list.
+ * The generated traffic is offline and deterministic; no packets are sent.
+ */
+export function buildVoipCalls(input = {}) {
+  const callCount = integer(input.callCount ?? 6, 2, 64, "通话数");
+  const spacing = Number(input.spacing ?? 0.12);
+  if (!Number.isFinite(spacing) || spacing < 0.01 || spacing > 60)
+    throw new Error("通话间隔应为 0.01–60 秒");
+  const frames = [];
+  let order = 0;
+  for (let index = 0; index < callCount; index += 1) {
+    const source = `192.0.2.${10 + index}`;
+    const destination = `198.51.100.${20 + index}`;
+    const number = String(index + 1).padStart(2, "0");
+    const callId = `webtshark-call-${number}@demo.local`;
+    const branch = `z9hG4bK-webtshark-${number}`;
+    const fromTag = `caller-${number}`;
+    const toTag = `callee-${number}`;
+    const mode = index % 4;
+    const offer = demoSdp(source, "alice");
+    const answer = demoSdp(destination, "bob");
+    const events = [
+      { at: 0, method: "INVITE", body: offer },
+      { at: 0.018, code: 100, reason: "Trying" },
+      ...(mode === 1
+        ? [
+            { at: 0.08, code: 486, reason: "Busy Here", toTag },
+            { at: 0.1, method: "ACK", cseqMethod: "ACK", toTag },
+          ]
+        : mode === 2
+          ? [{ at: 0.08, code: 180, reason: "Ringing", toTag }]
+          : mode === 3
+            ? [
+                { at: 0.08, code: 180, reason: "Ringing", toTag },
+                { at: 0.11, method: "CANCEL", toTag },
+                { at: 0.13, code: 200, reason: "OK", cseqMethod: "CANCEL", toTag },
+                { at: 0.16, code: 487, reason: "Request Terminated", toTag },
+              ]
+            : [
+                { at: 0.08, code: 180, reason: "Ringing", toTag },
+                { at: 0.18, code: 200, reason: "OK", toTag, body: answer, contact: true },
+                { at: 0.2, method: "ACK", cseqMethod: "ACK", toTag },
+                { at: 0.55, method: "BYE", cseq: 2, toTag },
+                { at: 0.58, code: 200, reason: "OK", cseqMethod: "BYE", cseq: 2, toTag },
+              ]),
+    ];
+    const start = index * spacing;
+    for (const event of events) {
+      const response = event.code != null;
+      const payload = sipDialogMessage({
+        source: response ? destination : source,
+        destination: response ? source : destination,
+        callId,
+        branch: `${branch}-${event.method || event.cseqMethod || "response"}`,
+        fromTag,
+        toTag: response || event.toTag ? toTag : "",
+        event,
+      });
+      frames.push({
+        time: start + event.at,
+        order: order++,
+        bytes: sipUdpFrame(
+          response ? destination : source,
+          response ? source : destination,
+          payload,
+          order,
+          response ? 5060 : 5062,
+        ),
+      });
+    }
+  }
+  return pcapFromFrames(frames);
 }
 export function buildCapture(input = {}) {
   const c = { ...composeDefaults, ...input },

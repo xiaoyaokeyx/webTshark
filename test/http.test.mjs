@@ -36,6 +36,20 @@ test("raw upload, status polling, real packet detail and pagination API", async 
   assert.equal(largerPage.pageSize, 200);
   assert.equal(largerPage.packets.length, 194);
 });
+test("valid capture is accepted when the filename has no capture extension", async () => {
+  const res = await fetch(server.base + "/api/captures", {
+    method: "POST",
+    headers: {
+      "X-File-Name": "capture.without-extension",
+      "Content-Type": "application/octet-stream",
+    },
+    body: buildDemoPcap(),
+  });
+  assert.equal(res.status, 202);
+  const c = await waitCapture(server.base, (await res.json()).id);
+  assert.equal(c.status, "ready");
+  assert.equal(c.name, "capture.without-extension");
+});
 test("sip_mrcp media-port macro resolves the SIP dialog and RTP stream", async () => {
   const response = await fetch(
     `${server.base}/api/captures/${capture.id}/packets?filter=${encodeURIComponent("sip_mrcp.port=20000")}&size=200`,
@@ -138,7 +152,7 @@ test("bad filter and invalid config return errors without destroying last valid 
   assert.equal(after.revision, before.revision);
   assert.equal(after.status, "ready");
 });
-test("cross-site requests are denied and invalid PCAP reports parse error", async () => {
+test("cross-site requests are denied and invalid capture headers are rejected", async () => {
   const denied = await fetch(server.base + "/api/demo", {
     method: "POST",
     headers: { Origin: "https://untrusted.example" },
@@ -149,7 +163,6 @@ test("cross-site requests are denied and invalid PCAP reports parse error", asyn
     headers: { "X-File-Name": "invalid.pcap" },
     body: Buffer.alloc(100, 42),
   });
-  const c = await waitCapture(server.base, (await res.json()).id);
-  assert.equal(c.status, "error");
-  assert.ok(c.error);
+  assert.equal(res.status, 400);
+  assert.match((await res.json()).error, /文件头/);
 });

@@ -1,16 +1,5 @@
-import { createReadStream } from "node:fs";
-import { createInterface } from "node:readline";
-
-export async function* indexRecords(index) {
-  const stream = createReadStream(index.path, { encoding: "utf8" });
-  const reader = createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of reader) if (line) yield JSON.parse(line);
-  } finally {
-    reader.close();
-    stream.destroy();
-  }
-}
+import { indexRecords } from "./index-storage.mjs";
+export { indexRecords } from "./index-storage.mjs";
 const val = (p, name) => p.fields?.[name] || "";
 const bodyText = (value) =>
   /^(?:[0-9a-f]{2}:?)+$/i.test(value)

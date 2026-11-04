@@ -102,7 +102,7 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
     }
     await act(() => root.render(React.createElement(App)));
     await wait(
-      () => document.querySelectorAll(".packet-table tbody tr").length === 100,
+      () => document.querySelectorAll(".packet-panel .packet-table tbody tr").length === 100,
       "initial packets",
     );
     assert.equal(

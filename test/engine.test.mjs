@@ -1,6 +1,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, readFile, stat } from "node:fs/promises";
+import { indexRecords } from "../server/index-storage.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildDemoPcap } from "../server/fixtures.mjs";
@@ -92,9 +93,19 @@ test("filtered index reuse matches full TShark extraction, including empty and c
       await pageFromIndex(extracted, 0, 1000),
       filter,
     );
+    assert.equal(reused.kind, "selection");
+    assert.equal((await stat(reused.path)).size, reused.count * 16);
+    const records = [];
+    for await (const record of indexRecords(reused)) records.push(record);
+    assert.deepEqual(records, await pageFromIndex(extracted, 0, 1000));
+    assert.deepEqual(await pageFromIndex(reused, 0, 1000, { field: "frame.len", direction: "desc" }),
+      await pageFromIndex(extracted, 0, 1000, { field: "frame.len", direction: "desc" }));
   }
 });
-test("query cache retains recently used filters when evicting entries", async () => {
+test("query cache retains recently used filters when evicting entries", async (t) => {
+  const previous = process.env.QUERY_CACHE_LIMIT;
+  process.env.QUERY_CACHE_LIMIT = "4";
+  t.after(() => { if (previous == null) delete process.env.QUERY_CACHE_LIMIT; else process.env.QUERY_CACHE_LIMIT = previous; });
   const local = { ...capture, queries: new Map() };
   const first = await getIndex(local, "tcp");
   await getIndex(local, "udp");
