@@ -81,7 +81,9 @@
   font-size: 12px;
 }
 .voip-call-list {
-  margin: 20px 24px 0;
+  /* Give the session table the full analysis canvas instead of leaving wide
+     gutters that reduce the usable Call-ID/endpoint columns. */
+  margin: 20px 12px 0;
   border: 1px solid var(--voip-line);
   border-radius: 7px;
   overflow: hidden;
@@ -125,7 +127,10 @@
   color: var(--voip-muted);
 }
 .voip-call-table-wrap {
-  max-height: 258px;
+  /* The old fixed 258px viewport exposed only a handful of calls. Keep the
+     list bounded, but make it scale with the browser viewport so the user can
+     review the majority of sessions without making the page unbounded. */
+  max-height: min(540px, 52vh);
   overflow: auto;
 }
 .voip-call-table {
@@ -1146,6 +1151,12 @@
   .voip-call-route {
     font-size: 10px;
   }
+  .voip-call-list {
+    margin-inline: 12px;
+  }
+  .voip-call-table-wrap {
+    max-height: min(460px, 46vh);
+  }
   .voip-call-table th,
   .voip-call-table td {
     padding-inline: 9px;
@@ -1191,6 +1202,9 @@
   }
   .voip-call-list {
     margin: 16px 12px 0;
+  }
+  .voip-call-table-wrap {
+    max-height: min(420px, 54vh);
   }
   .voip-call-list-heading {
     flex-wrap: wrap;
