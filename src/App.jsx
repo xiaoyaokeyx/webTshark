@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+import { PacketWorkspace } from "./ResizableSplit.jsx";
+import PacketMenu, { WorkbenchTools } from "./PacketMenu.jsx";
 import {
   Activity,
   ArrowDown,
@@ -1926,7 +1928,9 @@ export default function App() {
           </div>
         </div>
       </aside>
-      <div className="main-shell">
+      <div
+        className={`main-shell ${ready && view === "packets" ? "packet-focus" : ""}`}
+      >
         <div
           className="capture-tabs"
           role="tablist"
@@ -1961,7 +1965,12 @@ export default function App() {
           <button className="text-button" onClick={() => setModal("import")}>
             ＋ 打开
           </button>
-          <button className="text-button" onClick={reopenTab}>
+          <button
+            className="text-button reopen-tab-button"
+            onClick={reopenTab}
+            disabled={!closedTabs.current.length}
+            title="重新打开关闭的标签"
+          >
             重新打开关闭的标签
           </button>
         </div>
@@ -1991,8 +2000,10 @@ export default function App() {
             </button>
           </div>
         </header>
-        <main className={`main-content main-content-${view}`}>
-          <div className="feature-launcher" aria-label="增强分析工具">
+        <main
+          className={`main-content main-content-${view} ${ready && view === "packets" ? "packet-focus-content" : ""}`}
+        >
+          <WorkbenchTools compact={ready && view === "packets"}>
             {health?.preview && (
               <a
                 className="button secondary"
@@ -2011,7 +2022,10 @@ export default function App() {
             <button disabled={!ready} onClick={() => setFeature("navigate")}>
               跳转 / 搜索
             </button>
-          </div>
+            {ready && view === "packets" && (
+              <button onClick={closeCapture}>关闭当前抓包文件</button>
+            )}
+          </WorkbenchTools>
           <div className="page-heading">
             <div>
               <div className="eyebrow">PACKET INTELLIGENCE</div>
@@ -2039,6 +2053,7 @@ export default function App() {
               </button>
               <button
                 className="button primary"
+                aria-label="打开抓包文件"
                 onClick={() => {
                   setImportFile(null);
                   setImportError("");
@@ -2046,7 +2061,7 @@ export default function App() {
                 }}
               >
                 <Plus size={17} />
-                打开抓包文件
+                {ready && view === "packets" ? "打开" : "打开抓包文件"}
               </button>
             </div>
           </div>
@@ -2068,6 +2083,13 @@ export default function App() {
                 </div>
                 <div className="capture-file-title">
                   <strong>{capture.name}</strong>
+                  {ready && view === "packets" && (
+                    <span className="packet-file-stats">
+                      {summary.count.toLocaleString()} 包 ·{" "}
+                      {sizeLabel(capture.size)} · {summary.duration.toFixed(3)}{" "}
+                      秒
+                    </span>
+                  )}
                   <span>
                     <span className="status-dot" />
                     {ready
@@ -2226,18 +2248,6 @@ export default function App() {
                   ) : (
                     <kbd>⌘ K</kbd>
                   )}
-                  <div className="filter-action-divider" />
-                  <IconButton
-                    icon={Star}
-                    label="保存当前过滤器"
-                    onClick={saveFilter}
-                  />
-                  <IconButton
-                    icon={Bookmark}
-                    label="保存当前视图"
-                    disabled={!ready}
-                    onClick={saveWorkspaceView}
-                  />
                   <button className="apply-button" onClick={() => apply()}>
                     {loading ? (
                       <LoaderCircle className="spin" size={13} />
@@ -2320,361 +2330,323 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                <div className="filter-presets">
-                  <div className="preset-list">
-                    {presets.map(([label, value]) => (
-                      <button
-                        key={label}
-                        className={`preset ${applied === value ? "selected" : ""}`}
-                        aria-pressed={applied === value}
-                        onClick={() => apply(applied === value ? "" : value)}
-                      >
-                        {label === "异常数据包" && <TriangleAlert size={12} />}
-                        <span>{label}</span>
-                      </button>
-                    ))}
+                <PacketMenu label="过滤选项" className="packet-filter-menu">
+                  <div className="filter-save-actions">
+                    <IconButton
+                      icon={Star}
+                      label="保存当前过滤器"
+                      onClick={saveFilter}
+                    />
+                    <IconButton
+                      icon={Bookmark}
+                      label="保存当前视图"
+                      disabled={!ready}
+                      onClick={saveWorkspaceView}
+                    />
                   </div>
-                  <div className="saved-filter-wrap">
-                    <button
-                      className="text-button saved-filter"
-                      onClick={() => setShowSaved(!showSaved)}
-                    >
-                      <Star size={13} />
-                      已保存的过滤器
-                      <ChevronDown size={12} />
-                    </button>
-                    {showSaved && (
-                      <div className="saved-popover">
-                        <strong>收藏的显示过滤器</strong>
-                        {savedFilters.map((f) => (
-                          <button key={f} onClick={() => apply(f)}>
-                            <Code2 size={14} />
-                            <code>{f}</code>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </section>
-              <section
-                className={`packet-panel ${loading ? "is-loading" : ""}`}
-              >
-                <div className="batch-toolbar packet-batch-tools">
-                  <div className="batch-group" aria-label="包导航">
-                    <button
-                      disabled={!rows.length}
-                      onClick={() => {
-                        const i = rows.findIndex((p) => p.no === selectedNo);
-                        setSelectedNo(rows[Math.max(0, i - 1)]?.no);
-                      }}
-                    >
-                      上一包
-                    </button>
-                    <button
-                      disabled={!rows.length}
-                      onClick={() => {
-                        const i = rows.findIndex((p) => p.no === selectedNo);
-                        setSelectedNo(
-                          rows[Math.min(rows.length - 1, i + 1)]?.no,
-                        );
-                      }}
-                    >
-                      下一包
-                    </button>
-                  </div>
-                  <div className="batch-group" aria-label="包标记">
-                    <button
-                      onClick={() =>
-                        setBookmarked(
-                          new Set([...bookmarked, ...rows.map((p) => p.no)]),
-                        )
-                      }
-                    >
-                      标记本页
-                    </button>
-                    <button onClick={() => setBookmarked(new Set())}>
-                      清除标记
-                    </button>
-                    <button
-                      disabled={!bookmarked.size}
-                      onClick={saveMarkedView}
-                    >
-                      收藏标记包 ({bookmarked.size})
-                    </button>
-                  </div>
-                  <details className="batch-extra">
-                    <summary>批量范围与过滤历史</summary>
-                    <div className="batch-extra-content">
-                      <div className="batch-group range-controls">
-                        <label>
-                          包号范围{" "}
-                          <input
-                            aria-label="范围起始包号"
-                            type="number"
-                            min="1"
-                            value={rangeStart}
-                            onChange={(e) => setRangeStart(e.target.value)}
-                          />
-                        </label>
-                        <span>—</span>
-                        <input
-                          aria-label="范围结束包号"
-                          type="number"
-                          min="1"
-                          value={rangeEnd}
-                          onChange={(e) => setRangeEnd(e.target.value)}
-                        />
+                  <div className="filter-presets">
+                    <div className="preset-list">
+                      {presets.map(([label, value]) => (
                         <button
-                          onClick={() => {
-                            const a = Number(rangeStart),
-                              b = Number(rangeEnd);
-                            if (
-                              !Number.isInteger(a) ||
-                              !Number.isInteger(b) ||
-                              a < 1 ||
-                              b < a ||
-                              b - a > 10000
-                            )
-                              return setToast("有效范围为 1–10000 个包");
-                            setBookmarked(
-                              new Set([
-                                ...bookmarked,
-                                ...Array.from(
-                                  { length: b - a + 1 },
-                                  (_, i) => a + i,
-                                ),
-                              ]),
-                            );
-                          }}
+                          key={label}
+                          className={`preset ${applied === value ? "selected" : ""}`}
+                          aria-pressed={applied === value}
+                          onClick={() => apply(applied === value ? "" : value)}
                         >
-                          批量标记
+                          {label === "异常数据包" && (
+                            <TriangleAlert size={12} />
+                          )}
+                          <span>{label}</span>
                         </button>
-                      </div>
-                      <div className="batch-group">
-                        <button
-                          onClick={() => {
-                            historyCursor.current = Math.min(
-                              filterHistory.length - 1,
-                              historyCursor.current + 1,
-                            );
-                            historyNavigation.current = true;
-                            apply(filterHistory[historyCursor.current] || "");
-                          }}
-                        >
-                          撤销过滤
-                        </button>
-                        <button
-                          onClick={() => {
-                            historyCursor.current = Math.max(
-                              0,
-                              historyCursor.current - 1,
-                            );
-                            historyNavigation.current = true;
-                            apply(filterHistory[historyCursor.current] || "");
-                          }}
-                        >
-                          恢复过滤
-                        </button>
-                        <select
-                          aria-label="过滤器历史"
-                          value=""
-                          onChange={(e) => apply(e.target.value)}
-                        >
-                          <option value="">过滤器历史</option>
-                          {filterHistory.map((f, i) => (
-                            <option key={i} value={f}>
-                              {f || "全部数据包"}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
+                      ))}
                     </div>
-                  </details>
-                </div>
-                <div className="panel-toolbar">
-                  <div className="panel-title">
-                    <Layers3 size={16} />
-                    <h2>数据包列表</h2>
-                    <span className="count-badge">{total}</span>
-                    {loading && <span className="filtered-label">筛选中…</span>}
-                  </div>
-                  <div className="panel-tools">
-                    <button
-                      className={`text-button ${compareMode ? "accent-text" : ""}`}
-                      aria-label={
-                        compareMode
-                          ? `选择比较数据包 ${compareSelection.length}/2`
-                          : "进入数据包比较模式"
-                      }
-                      title={
-                        compareMode
-                          ? "点击两行选择数据包"
-                          : "选择两个数据包进行比较"
-                      }
-                      onClick={() => {
-                        setCompareMode(!compareMode);
-                        if (compareMode) setCompareSelection([]);
-                      }}
-                    >
-                      <GitCompareArrows size={14} />
-                      <span>
-                        {compareMode
-                          ? `选择中 ${compareSelection.length}/2`
-                          : "包比较"}
-                      </span>
-                    </button>
-                    <button
-                      className="text-button"
-                      aria-label={
-                        sipCompare
-                          ? "比较选中 SIP 数据包的头域和 SDP"
-                          : "比较选中的两个数据包"
-                      }
-                      title={
-                        sipCompare
-                          ? "比较 SIP 头域和 SDP 原始行"
-                          : "查看两个选中数据包的差异"
-                      }
-                      disabled={compareSelection.length !== 2}
-                      onClick={() => setModal("compare")}
-                    >
-                      <GitCompareArrows size={14} />
-                      <span>{sipCompare ? "SIP 头域/SDP" : "查看差异"}</span>
-                    </button>
-                    <button
-                      className={`text-button ${markedOnly ? "accent-text" : ""}`}
-                      onClick={() => {
-                        setMarkedOnly(!markedOnly);
-                        setQuery((q) => ({ ...q, page: 0 }));
-                      }}
-                    >
-                      <Star
-                        size={14}
-                        fill={markedOnly ? "currentColor" : "none"}
-                      />
-                      <span>仅看标记</span>
-                      {bookmarked.size > 0 && <small>{bookmarked.size}</small>}
-                    </button>
-                    <span className="tool-divider" />
-                    <IconButton
-                      icon={ListFilter}
-                      label="切换协议行着色"
-                      active={colors}
-                      onClick={() => setColors(!colors)}
-                    />
-                    <IconButton
-                      icon={Columns3}
-                      label="数据包列与时间设置"
-                      onClick={() => setModal("columns")}
-                    />
-                    <IconButton
-                      icon={MoreHorizontal}
-                      label="当前数据包操作"
-                      disabled={!selected}
-                      onClick={(e) => contextFor(e, selected)}
-                    />
-                  </div>
-                </div>
-                <div
-                  ref={tableRef}
-                  className={`packet-table-wrap ${colors ? "colored-rows" : ""}`}
-                >
-                  <table className="packet-table">
-                    <thead>
-                      <tr>
-                        {visibleColumns.map((column) => (
-                          <th
-                            key={column.id}
-                            className={`packet-column-th packet-column-${column.id}`}
-                            style={
-                              columnWidths[column.id]
-                                ? {
-                                    width: `${columnWidths[column.id]}px`,
-                                    minWidth: `${columnWidths[column.id]}px`,
-                                  }
-                                : undefined
-                            }
-                            aria-sort={
-                              sort.key === column.id ? sort.direction : "none"
-                            }
-                          >
-                            <button
-                              className="packet-column-button"
-                              onClick={() => toggleSort(column.id)}
-                              title={`按${column.id === "time" ? timeFormats.find(([id]) => id === timeFormat)?.[1] || column.label : column.label}排序`}
-                            >
-                              <span className="packet-column-label">
-                                {column.id === "time"
-                                  ? timeHeaderLabels.get(timeFormat) ||
-                                    column.label
-                                  : column.label}
-                              </span>
-                              {sort.key === column.id ? (
-                                sort.direction === "asc" ? (
-                                  <ArrowUp size={10} />
-                                ) : (
-                                  <ArrowDown size={10} />
-                                )
-                              ) : (
-                                <ArrowDown size={9} className="sort-muted" />
-                              )}
+                    <div className="saved-filter-wrap">
+                      <button
+                        className="text-button saved-filter"
+                        data-keep-menu
+                        onClick={() => setShowSaved(!showSaved)}
+                      >
+                        <Star size={13} />
+                        已保存的过滤器
+                        <ChevronDown size={12} />
+                      </button>
+                      {showSaved && (
+                        <div className="saved-popover">
+                          <strong>收藏的显示过滤器</strong>
+                          {savedFilters.map((f) => (
+                            <button key={f} onClick={() => apply(f)}>
+                              <Code2 size={14} />
+                              <code>{f}</code>
                             </button>
-                            <span
-                              className="column-resizer"
-                              role="separator"
-                              aria-orientation="vertical"
-                              aria-label={`调整 ${column.label} 列宽`}
-                              title="拖拽调整列宽，双击恢复默认"
-                              onMouseDown={(event) =>
-                                startColumnResize(event, column.id)
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </PacketMenu>
+              </section>
+              <PacketWorkspace>
+                <section
+                  className={`packet-panel ${loading ? "is-loading" : ""}`}
+                >
+                  <div className="panel-toolbar">
+                    <div className="panel-title">
+                      <Layers3 size={16} />
+                      <h2>数据包列表</h2>
+                      <span className="count-badge">{total}</span>
+                      {loading && (
+                        <span className="filtered-label">筛选中…</span>
+                      )}
+                    </div>
+                    <div className="panel-tools">
+                      <PacketMenu
+                        label="批量 / 历史"
+                        className="packet-batch-menu"
+                        width={470}
+                      >
+                        <div className="batch-toolbar packet-batch-tools">
+                          <div className="batch-group" aria-label="包导航">
+                            <button
+                              disabled={!rows.length}
+                              onClick={() => {
+                                const i = rows.findIndex(
+                                  (p) => p.no === selectedNo,
+                                );
+                                setSelectedNo(rows[Math.max(0, i - 1)]?.no);
+                              }}
+                            >
+                              上一包
+                            </button>
+                            <button
+                              disabled={!rows.length}
+                              onClick={() => {
+                                const i = rows.findIndex(
+                                  (p) => p.no === selectedNo,
+                                );
+                                setSelectedNo(
+                                  rows[Math.min(rows.length - 1, i + 1)]?.no,
+                                );
+                              }}
+                            >
+                              下一包
+                            </button>
+                          </div>
+                          <div className="batch-group" aria-label="包标记">
+                            <button
+                              onClick={() =>
+                                setBookmarked(
+                                  new Set([
+                                    ...bookmarked,
+                                    ...rows.map((p) => p.no),
+                                  ]),
+                                )
                               }
-                              onDoubleClick={() => resetColumnWidth(column.id)}
-                            />
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {displayRows.map((p) => (
-                        <tr
-                          key={p.no}
-                          tabIndex={0}
-                          aria-selected={selected?.no === p.no}
-                          className={`packet-row ${protocolClass(p.protocol)}-row ${p.issue ? "issue-row" : ""} ${selected?.no === p.no ? "selected-row" : ""} ${compareSelection.includes(p.no) ? "compare-selected-row" : ""}`}
-                          onClick={(e) => packetClick(e, p)}
-                          onContextMenu={(e) => {
-                            if (e.defaultPrevented) return;
-                            contextFor(e, p);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              setSelectedNo(p.no);
-                            }
-                            if (
-                              e.key === "ContextMenu" ||
-                              (e.shiftKey && e.key === "F10")
-                            )
-                              contextFor(e, p);
-                            if (["ArrowDown", "ArrowUp"].includes(e.key)) {
-                              e.preventDefault();
-                              const next =
-                                rows.indexOf(p) +
-                                (e.key === "ArrowDown" ? 1 : -1);
-                              if (rows[next]) {
-                                setSelectedNo(rows[next].no);
-                                e.currentTarget.parentElement.children[
-                                  next
-                                ]?.focus();
-                              }
-                            }
+                            >
+                              标记本页
+                            </button>
+                            <button onClick={() => setBookmarked(new Set())}>
+                              清除标记
+                            </button>
+                            <button
+                              disabled={!bookmarked.size}
+                              onClick={saveMarkedView}
+                            >
+                              收藏标记包 ({bookmarked.size})
+                            </button>
+                          </div>
+                          <details className="batch-extra">
+                            <summary>批量范围与过滤历史</summary>
+                            <div className="batch-extra-content">
+                              <div className="batch-group range-controls">
+                                <label>
+                                  包号范围{" "}
+                                  <input
+                                    aria-label="范围起始包号"
+                                    type="number"
+                                    min="1"
+                                    value={rangeStart}
+                                    onChange={(e) =>
+                                      setRangeStart(e.target.value)
+                                    }
+                                  />
+                                </label>
+                                <span>—</span>
+                                <input
+                                  aria-label="范围结束包号"
+                                  type="number"
+                                  min="1"
+                                  value={rangeEnd}
+                                  onChange={(e) => setRangeEnd(e.target.value)}
+                                />
+                                <button
+                                  onClick={() => {
+                                    const a = Number(rangeStart),
+                                      b = Number(rangeEnd);
+                                    if (
+                                      !Number.isInteger(a) ||
+                                      !Number.isInteger(b) ||
+                                      a < 1 ||
+                                      b < a ||
+                                      b - a > 10000
+                                    )
+                                      return setToast(
+                                        "有效范围为 1–10000 个包",
+                                      );
+                                    setBookmarked(
+                                      new Set([
+                                        ...bookmarked,
+                                        ...Array.from(
+                                          { length: b - a + 1 },
+                                          (_, i) => a + i,
+                                        ),
+                                      ]),
+                                    );
+                                  }}
+                                >
+                                  批量标记
+                                </button>
+                              </div>
+                              <div className="batch-group">
+                                <button
+                                  onClick={() => {
+                                    historyCursor.current = Math.min(
+                                      filterHistory.length - 1,
+                                      historyCursor.current + 1,
+                                    );
+                                    historyNavigation.current = true;
+                                    apply(
+                                      filterHistory[historyCursor.current] ||
+                                        "",
+                                    );
+                                  }}
+                                >
+                                  撤销过滤
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    historyCursor.current = Math.max(
+                                      0,
+                                      historyCursor.current - 1,
+                                    );
+                                    historyNavigation.current = true;
+                                    apply(
+                                      filterHistory[historyCursor.current] ||
+                                        "",
+                                    );
+                                  }}
+                                >
+                                  恢复过滤
+                                </button>
+                                <select
+                                  aria-label="过滤器历史"
+                                  value=""
+                                  onChange={(e) => apply(e.target.value)}
+                                >
+                                  <option value="">过滤器历史</option>
+                                  {filterHistory.map((f, i) => (
+                                    <option key={i} value={f}>
+                                      {f || "全部数据包"}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          </details>
+                        </div>
+                      </PacketMenu>
+                      <PacketMenu label="列表操作" className="packet-list-menu">
+                        <button
+                          className={`text-button ${compareMode ? "accent-text" : ""}`}
+                          aria-label={
+                            compareMode
+                              ? `选择比较数据包 ${compareSelection.length}/2`
+                              : "进入数据包比较模式"
+                          }
+                          title={
+                            compareMode
+                              ? "点击两行选择数据包"
+                              : "选择两个数据包进行比较"
+                          }
+                          onClick={() => {
+                            setCompareMode(!compareMode);
+                            if (compareMode) setCompareSelection([]);
                           }}
                         >
+                          <GitCompareArrows size={14} />
+                          <span>
+                            {compareMode
+                              ? `选择中 ${compareSelection.length}/2`
+                              : "包比较"}
+                          </span>
+                        </button>
+                        <button
+                          className="text-button"
+                          aria-label={
+                            sipCompare
+                              ? "比较选中 SIP 数据包的头域和 SDP"
+                              : "比较选中的两个数据包"
+                          }
+                          title={
+                            sipCompare
+                              ? "比较 SIP 头域和 SDP 原始行"
+                              : "查看两个选中数据包的差异"
+                          }
+                          disabled={compareSelection.length !== 2}
+                          onClick={() => setModal("compare")}
+                        >
+                          <GitCompareArrows size={14} />
+                          <span>
+                            {sipCompare ? "SIP 头域/SDP" : "查看差异"}
+                          </span>
+                        </button>
+                        <button
+                          className={`text-button ${markedOnly ? "accent-text" : ""}`}
+                          onClick={() => {
+                            setMarkedOnly(!markedOnly);
+                            setQuery((q) => ({ ...q, page: 0 }));
+                          }}
+                        >
+                          <Star
+                            size={14}
+                            fill={markedOnly ? "currentColor" : "none"}
+                          />
+                          <span>仅看标记</span>
+                          {bookmarked.size > 0 && (
+                            <small>{bookmarked.size}</small>
+                          )}
+                        </button>
+                        <span className="tool-divider" />
+                        <IconButton
+                          icon={ListFilter}
+                          label="切换协议行着色"
+                          active={colors}
+                          onClick={() => setColors(!colors)}
+                        />
+                        <IconButton
+                          icon={Columns3}
+                          label="数据包列与时间设置"
+                          onClick={() => setModal("columns")}
+                        />
+                        <IconButton
+                          icon={MoreHorizontal}
+                          label="当前数据包操作"
+                          disabled={!selected}
+                          onClick={(e) => contextFor(e, selected)}
+                        />
+                      </PacketMenu>
+                    </div>
+                  </div>
+                  <div
+                    ref={tableRef}
+                    className={`packet-table-wrap ${colors ? "colored-rows" : ""}`}
+                  >
+                    <table className="packet-table">
+                      <thead>
+                        <tr>
                           {visibleColumns.map((column) => (
-                            <td
+                            <th
                               key={column.id}
-                              className={`packet-column-cell packet-column-${column.id}`}
+                              className={`packet-column-th packet-column-${column.id}`}
                               style={
                                 columnWidths[column.id]
                                   ? {
@@ -2683,119 +2655,212 @@ export default function App() {
                                     }
                                   : undefined
                               }
-                              onContextMenu={(e) => contextFor(e, p, column.id)}
-                              title={String(
-                                column.id === "time"
-                                  ? formatPacketTime(p, timeFormat)
-                                  : (columnValue(p, column) ?? ""),
-                              )}
+                              aria-sort={
+                                sort.key === column.id ? sort.direction : "none"
+                              }
                             >
-                              {column.id === "no" ? (
-                                <span className="row-number">
-                                  {bookmarked.has(p.no) && (
-                                    <Star size={9} fill="currentColor" />
-                                  )}
-                                  {p.no}
+                              <button
+                                className="packet-column-button"
+                                onClick={() => toggleSort(column.id)}
+                                title={`按${column.id === "time" ? timeFormats.find(([id]) => id === timeFormat)?.[1] || column.label : column.label}排序`}
+                              >
+                                <span className="packet-column-label">
+                                  {column.id === "time"
+                                    ? timeHeaderLabels.get(timeFormat) ||
+                                      column.label
+                                    : column.label}
                                 </span>
-                              ) : column.id === "time" ? (
-                                formatPacketTime(p, timeFormat)
-                              ) : column.id === "protocol" ? (
-                                <Protocol name={p.protocol} />
-                              ) : (
-                                (columnValue(p, column) ?? "")
-                              )}
-                            </td>
+                                {sort.key === column.id ? (
+                                  sort.direction === "asc" ? (
+                                    <ArrowUp size={10} />
+                                  ) : (
+                                    <ArrowDown size={10} />
+                                  )
+                                ) : (
+                                  <ArrowDown size={9} className="sort-muted" />
+                                )}
+                              </button>
+                              <span
+                                className="column-resizer"
+                                role="separator"
+                                aria-orientation="vertical"
+                                aria-label={`调整 ${column.label} 列宽`}
+                                title="拖拽调整列宽，双击恢复默认"
+                                onMouseDown={(event) =>
+                                  startColumnResize(event, column.id)
+                                }
+                                onDoubleClick={() =>
+                                  resetColumnWidth(column.id)
+                                }
+                              />
+                            </th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!rows.length && !loading && (
-                    <div className="empty-state">
-                      <Search size={27} />
-                      <strong>没有匹配的数据包</strong>
-                      <p>调整过滤表达式，或返回全部数据包。</p>
-                      <button
-                        className="button secondary"
-                        onClick={() => apply("")}
-                      >
-                        清除筛选
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <div className="table-footer">
-                  <span>
-                    匹配 <strong>{total.toLocaleString()}</strong> /{" "}
-                    {summary.count.toLocaleString()} 个 ·{" "}
-                    {sizeLabel(filteredBytes)}
-                  </span>
-                  <div className="pagination">
-                    <button
-                      aria-label="上一页"
-                      disabled={page === 0 || loading}
-                      onClick={() =>
-                        setQuery({ filter: applied, page: page - 1 })
-                      }
-                    >
-                      <ChevronRight size={13} className="rotate-180" />
-                    </button>
-                    <span>
-                      {page + 1} / {Math.max(1, Math.ceil(total / pageSize))}
-                    </span>
-                    <button
-                      aria-label="下一页"
-                      disabled={(page + 1) * pageSize >= total || loading}
-                      onClick={() =>
-                        setQuery({ filter: applied, page: page + 1 })
-                      }
-                    >
-                      <ChevronRight size={13} />
-                    </button>
-                    <label className="page-size-control">
-                      <span>每页</span>
-                      <select
-                        aria-label="每页数据包数量"
-                        value={pageSize}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          setPageSize(next);
-                          setQuery((current) => ({
-                            filter: current.filter,
-                            page: 0,
-                          }));
-                          setSelectedNo(null);
-                          setDetail(null);
-                        }}
-                      >
-                        {[100, 200, 500, 1000].map((size) => (
-                          <option key={size} value={size}>
-                            {size}
-                          </option>
+                      </thead>
+                      <tbody>
+                        {displayRows.map((p) => (
+                          <tr
+                            key={p.no}
+                            tabIndex={0}
+                            aria-selected={selected?.no === p.no}
+                            className={`packet-row ${protocolClass(p.protocol)}-row ${p.issue ? "issue-row" : ""} ${selected?.no === p.no ? "selected-row" : ""} ${compareSelection.includes(p.no) ? "compare-selected-row" : ""}`}
+                            onClick={(e) => packetClick(e, p)}
+                            onContextMenu={(e) => {
+                              if (e.defaultPrevented) return;
+                              contextFor(e, p);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedNo(p.no);
+                              }
+                              if (
+                                e.key === "ContextMenu" ||
+                                (e.shiftKey && e.key === "F10")
+                              )
+                                contextFor(e, p);
+                              if (["ArrowDown", "ArrowUp"].includes(e.key)) {
+                                e.preventDefault();
+                                const next =
+                                  rows.indexOf(p) +
+                                  (e.key === "ArrowDown" ? 1 : -1);
+                                if (rows[next]) {
+                                  setSelectedNo(rows[next].no);
+                                  e.currentTarget.parentElement.children[
+                                    next
+                                  ]?.focus();
+                                }
+                              }
+                            }}
+                          >
+                            {visibleColumns.map((column) => (
+                              <td
+                                key={column.id}
+                                className={`packet-column-cell packet-column-${column.id}`}
+                                style={
+                                  columnWidths[column.id]
+                                    ? {
+                                        width: `${columnWidths[column.id]}px`,
+                                        minWidth: `${columnWidths[column.id]}px`,
+                                      }
+                                    : undefined
+                                }
+                                onContextMenu={(e) =>
+                                  contextFor(e, p, column.id)
+                                }
+                                title={String(
+                                  column.id === "time"
+                                    ? formatPacketTime(p, timeFormat)
+                                    : (columnValue(p, column) ?? ""),
+                                )}
+                              >
+                                {column.id === "no" ? (
+                                  <span className="row-number">
+                                    {bookmarked.has(p.no) && (
+                                      <Star size={9} fill="currentColor" />
+                                    )}
+                                    {p.no}
+                                  </span>
+                                ) : column.id === "time" ? (
+                                  formatPacketTime(p, timeFormat)
+                                ) : column.id === "protocol" ? (
+                                  <Protocol name={p.protocol} />
+                                ) : (
+                                  (columnValue(p, column) ?? "")
+                                )}
+                              </td>
+                            ))}
+                          </tr>
                         ))}
-                      </select>
-                      <span>包</span>
-                    </label>
+                      </tbody>
+                    </table>
+                    {!rows.length && !loading && (
+                      <div className="empty-state">
+                        <Search size={27} />
+                        <strong>没有匹配的数据包</strong>
+                        <p>调整过滤表达式，或返回全部数据包。</p>
+                        <button
+                          className="button secondary"
+                          onClick={() => apply("")}
+                        >
+                          清除筛选
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <span className="table-hint">
-                    {compareMode
-                      ? "点击两行选择数据包 · 查看差异"
-                      : "右键字段筛选或追踪流 · 点击列头排序"}
-                  </span>
-                </div>
-              </section>
-              <PacketInspector
-                packet={selected}
-                detail={detail}
-                loading={detailLoading}
-                error={detailError}
-                captureId={capture.id}
-                onContext={setContext}
-                onStream={openStream}
-                onCopy={copy}
-                onMark={mark}
-                marked={selected && bookmarked.has(selected.no)}
-              />
+                  <div className="table-footer">
+                    <span>
+                      匹配 <strong>{total.toLocaleString()}</strong> /{" "}
+                      {summary.count.toLocaleString()} 个 ·{" "}
+                      {sizeLabel(filteredBytes)}
+                    </span>
+                    <div className="pagination">
+                      <button
+                        aria-label="上一页"
+                        disabled={page === 0 || loading}
+                        onClick={() =>
+                          setQuery({ filter: applied, page: page - 1 })
+                        }
+                      >
+                        <ChevronRight size={13} className="rotate-180" />
+                      </button>
+                      <span>
+                        {page + 1} / {Math.max(1, Math.ceil(total / pageSize))}
+                      </span>
+                      <button
+                        aria-label="下一页"
+                        disabled={(page + 1) * pageSize >= total || loading}
+                        onClick={() =>
+                          setQuery({ filter: applied, page: page + 1 })
+                        }
+                      >
+                        <ChevronRight size={13} />
+                      </button>
+                      <label className="page-size-control">
+                        <span>每页</span>
+                        <select
+                          aria-label="每页数据包数量"
+                          value={pageSize}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            setPageSize(next);
+                            setQuery((current) => ({
+                              filter: current.filter,
+                              page: 0,
+                            }));
+                            setSelectedNo(null);
+                            setDetail(null);
+                          }}
+                        >
+                          {[100, 200, 500, 1000].map((size) => (
+                            <option key={size} value={size}>
+                              {size}
+                            </option>
+                          ))}
+                        </select>
+                        <span>包</span>
+                      </label>
+                    </div>
+                    <span className="table-hint">
+                      {compareMode
+                        ? "点击两行选择数据包 · 查看差异"
+                        : "右键字段筛选或追踪流 · 点击列头排序"}
+                    </span>
+                  </div>
+                </section>
+                <PacketInspector
+                  packet={selected}
+                  detail={detail}
+                  loading={detailLoading}
+                  error={detailError}
+                  captureId={capture.id}
+                  onContext={setContext}
+                  onStream={openStream}
+                  onCopy={copy}
+                  onMark={mark}
+                  marked={selected && bookmarked.has(selected.no)}
+                />
+              </PacketWorkspace>
             </>
           )}
           {ready && view === "sipFlow" && (

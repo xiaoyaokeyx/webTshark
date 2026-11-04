@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
+import ResizableSplit, { useNarrowPanes } from "./ResizableSplit.jsx";
 import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Search,
   Star,
   GitBranch,
   ArrowUpRight,
@@ -280,12 +282,25 @@ export default function PacketInspector({
 }) {
   const [tab, setTab] = useState("fields"),
     [search, setSearch] = useState(""),
+    [searchOpen, setSearchOpen] = useState(false),
     [mode, setMode] = useState("hex"),
     [active, setActive] = useState(null);
+  const narrow = useNarrowPanes();
   useEffect(() => setActive(null), [packet?.no, detail]);
   const bytes = detail?.bytes || [];
   return (
-    <section className="details-grid">
+    <ResizableSplit
+      key={narrow ? "stacked" : "columns"}
+      className="details-grid resizable-details"
+      direction={narrow ? "vertical" : "horizontal"}
+      storageKey={`webshark-pane-details-${narrow ? "stacked" : "columns"}`}
+      defaultRatio={0.48}
+      minFirst={narrow ? 230 : 240}
+      minSecond={narrow ? 200 : 260}
+      label={
+        narrow ? "调整协议详情与字节区域高度" : "调整协议详情与字节区域宽度"
+      }
+    >
       <div className="protocol-panel">
         <div className="panel-toolbar detail-toolbar">
           <div className="detail-tabs">
@@ -307,6 +322,15 @@ export default function PacketInspector({
               {packet ? `Packet #${packet.no}` : "未选择"}
             </span>
             <IconButton
+              icon={Search}
+              label="搜索包内字段"
+              active={searchOpen}
+              onClick={() => {
+                setSearchOpen(!searchOpen);
+                if (searchOpen) setSearch("");
+              }}
+            />
+            <IconButton
               icon={Star}
               label="标记当前数据包"
               disabled={!packet}
@@ -321,18 +345,21 @@ export default function PacketInspector({
             />
           </div>
         </div>
-        <div className="batch-toolbar">
-          <label>
-            包内字段搜索{" "}
-            <input
-              aria-label="包内字段搜索"
-              style={{ width: 180 }}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </label>
-          <button onClick={() => setSearch("")}>清除</button>
-        </div>
+        {searchOpen && (
+          <div className="batch-toolbar">
+            <label>
+              包内字段搜索{" "}
+              <input
+                aria-label="包内字段搜索"
+                autoFocus
+                style={{ width: 180 }}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </label>
+            <button onClick={() => setSearch("")}>清除</button>
+          </div>
+        )}
         {tab === "notes" && packet ? (
           <PacketNote
             key={`${captureId}-${packet.no}`}
@@ -474,7 +501,7 @@ export default function PacketInspector({
           </button>
         </div>
       </div>
-    </section>
+    </ResizableSplit>
   );
 }
 function PacketNote({ captureId, no }) {

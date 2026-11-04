@@ -165,6 +165,7 @@ test("capture and saved-view tabs restore independent filters, close and reopen"
       document.querySelector("#packet-filter").value,
       "frame.number == 1",
     );
+    await click(button("工具"));
     await click(button("报文构造器"));
     assert.ok(
       document

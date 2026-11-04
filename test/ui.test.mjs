@@ -112,16 +112,38 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
     assert.ok(button("Time"), "time column uses compact header label");
     assert.equal(button("Seconds Since Beginning of Capture"), undefined);
     assert.equal(
+      button("报文构造器"),
+      undefined,
+      "less frequent tools stay in the menu",
+    );
+    assert.ok(!document.querySelector(".packet-menu-popup"));
+    await click(button("工具"));
+    assert.ok(button("报文构造器"));
+    await act(() =>
+      document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+        }),
+      ),
+    );
+    assert.ok(
+      !document.querySelector(".packet-menu-popup"),
+      "Escape dismisses tools without covering packets",
+    );
+    assert.equal(
       document.querySelectorAll(".column-resizer").length,
       document.querySelectorAll(".packet-table thead th").length,
     );
+    await click(button("过滤选项"));
     await click(button("TCP"));
     await wait(
       () =>
         document.querySelector("#packet-filter").value === "tcp" &&
-        button("TCP").getAttribute("aria-pressed") === "true",
+        !document.querySelector(".packet-panel.is-loading"),
       "TCP preset filter",
     );
+    await click(button("过滤选项"));
     assert.equal(button("TCP").getAttribute("aria-pressed"), "true");
     await click(button("TCP"));
     await wait(
@@ -130,7 +152,10 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
         document.querySelectorAll(".packet-table tbody tr").length === 100,
       "toggle TCP preset off",
     );
+    await click(button("过滤选项"));
     assert.equal(button("TCP").getAttribute("aria-pressed"), "false");
+    await click(button("过滤选项"));
+    await click(button("列表操作"));
     await click(button("数据包列与时间设置"));
     await select(document.querySelector("#time-format"), "epoch");
     const infoColumn = document.querySelector('[aria-label="显示 信息"]');
@@ -171,6 +196,7 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       ),
       false,
     );
+    await click(button("列表操作"));
     await click(button("数据包列与时间设置"));
     await click(button("恢复默认列"));
     await click(button("完成"));
@@ -179,15 +205,18 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
         th.textContent.includes("信息"),
       ),
     );
+    await click(button("列表操作"));
     await click(button("包比较"));
     await click(document.querySelector(".packet-table tbody tr"));
     await click(document.querySelectorAll(".packet-table tbody tr")[1]);
+    await click(button("列表操作"));
     await click(button("查看差异"));
     assert.match(
       document.querySelector('[role="dialog"]').textContent,
       /比较数据包 #/,
     );
     await click(button("完成", document.querySelector('[role="dialog"]')));
+    await click(button("列表操作"));
     await click(button("选择中 2/2"));
     await click(button("长度"));
     const row = [...document.querySelectorAll(".packet-table tbody tr")].find(
@@ -247,6 +276,7 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       document.querySelector("#packet-filter").value,
       "ip.src == 10.10.0.10",
     );
+    await click(button("过滤选项"));
     await click(button("保存当前视图"));
     await fill(document.querySelector("#saved-view-name"), "源地址分析");
     await click(button("保存视图", document.querySelector('[role="dialog"]')));
@@ -255,6 +285,7 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       document.querySelector(".saved-view-row").textContent,
       /源地址分析/,
     );
+    await click(button("过滤选项"));
     await click(button("RTP"));
     await wait(
       () =>
@@ -262,6 +293,7 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
         !document.querySelector(".packet-panel.is-loading"),
       "RTP saved view filter",
     );
+    await click(button("过滤选项"));
     await click(button("保存当前视图"));
     await fill(document.querySelector("#saved-view-name"), "RTP 媒体");
     await click(button("保存视图", document.querySelector('[role="dialog"]')));
@@ -289,6 +321,7 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       document.querySelectorAll(".packet-table tbody tr").length,
       69,
     );
+    await click(button("过滤选项"));
     await click(button("全部数据包"));
     await wait(
       () => document.querySelectorAll(".packet-table tbody tr").length === 100,
