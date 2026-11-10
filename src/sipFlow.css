@@ -21,23 +21,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 22px 24px 18px;
+  padding: 16px 24px;
 }
 .voip-eyebrow {
-  font-size: 11px;
+  display: none;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 1.7px;
   color: var(--voip-muted);
 }
 .voip-heading h1 {
   margin: 6px 0;
-  font-size: 23px;
+  font-size: 24px;
   line-height: 1.35;
   font-weight: 650;
   letter-spacing: -0.5px;
 }
 .voip-heading p {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--voip-muted);
   margin: 0;
   line-height: 1.7;
@@ -51,7 +52,7 @@
   padding: 0 12px;
   border: 1px solid var(--voip-line);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   background: #fff;
   color: var(--voip-ink);
@@ -64,7 +65,7 @@
   padding: 12px 24px;
   background: var(--voip-subtle);
   border-block: 1px solid var(--voip-line);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--voip-muted);
 }
 .voip-summary > span {
@@ -74,16 +75,16 @@
 }
 .voip-summary strong {
   color: var(--voip-ink);
-  font: 650 15px var(--mono);
+  font: 650 16px var(--mono);
 }
 .voip-summary .voip-summary-hint {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 13px;
 }
 .voip-call-list {
   /* Give the session table the full analysis canvas instead of leaving wide
      gutters that reduce the usable Call-ID/endpoint columns. */
-  margin: 20px 12px 0;
+  margin: 14px 12px 0;
   border: 1px solid var(--voip-line);
   border-radius: 7px;
   overflow: hidden;
@@ -98,11 +99,11 @@
   border-bottom: 1px solid var(--voip-line);
 }
 .voip-call-list-heading > span {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
 }
 .voip-call-list-heading small {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   color: var(--voip-muted);
   margin-left: 10px;
@@ -119,7 +120,7 @@
   border: 0;
   background: transparent;
   color: var(--voip-ink);
-  font-size: 13px;
+  font-size: 14px;
   height: 28px;
   padding: 0 4px;
 }
@@ -137,12 +138,15 @@
   width: 100%;
   border-collapse: collapse;
   text-align: left;
-  font-size: 13px;
+  font-size: 14px;
 }
 .voip-call-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: #fff;
   color: var(--voip-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   padding: 9px 12px;
   border-bottom: 1px solid var(--voip-line);
@@ -153,6 +157,31 @@
   border-bottom: 1px solid var(--voip-line);
   vertical-align: middle;
 }
+.voip-call-filters,
+.voip-call-pagination {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px;
+  color: var(--voip-muted);
+  font-size: 13px;
+  background: var(--voip-subtle);
+}
+.voip-call-filters { border-bottom: 1px solid var(--voip-line); }
+.voip-call-filters label,
+.voip-call-pagination > div { display: flex; align-items: center; gap: 8px; }
+.voip-call-filters select { min-height: 32px; font-size: 13px; color: var(--voip-ink); }
+.voip-call-filters > span { margin-left: auto; }
+.voip-call-filters > button { color: var(--voip-blue); padding: 6px; }
+.voip-call-pagination { justify-content: space-between; border-top: 1px solid var(--voip-line); }
+.voip-call-pagination button { display: grid; place-items: center; min-width: 32px; min-height: 32px; border: 1px solid var(--voip-line); border-radius: 5px; background: #fff; }
+.voip-call-pagination span { font-variant-numeric: tabular-nums; }
+.voip-call-table tr.is-selected td:first-child { box-shadow: inset 3px 0 var(--voip-blue); }
+.voip-call-start { display: block; max-width: 210px; white-space: normal; line-height: 1.6; overflow-wrap: anywhere; }
+.voip-call-list-heading { flex-wrap: wrap; }
+.voip-search { border: 1px solid var(--voip-line); border-radius: 6px; padding: 2px 8px; background: #fff; }
+.voip-call-list:last-child { margin-bottom: 16px; }
 .voip-call-table tr:last-child td {
   border-bottom: 0;
 }
@@ -172,7 +201,7 @@
 }
 .voip-call-table td > small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--voip-muted);
   margin-top: 4px;
 }
@@ -183,9 +212,11 @@
   white-space: nowrap;
 }
 .voip-call-identity strong {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
+.voip-status.is-pending { color: #8a5a0a; background: #fff8e8; border-color: #eedcb6; }
+.voip-status.is-neutral { color: #596c80; background: #f3f5f8; border-color: #dce4ed; }
 .voip-color-dot {
   display: inline-block;
   flex-shrink: 0;
@@ -233,14 +264,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--voip-muted);
-  font: 11px var(--mono);
-  margin: 5px 0 0 14px;
+  font: 12px var(--mono);
+  margin: 5px 0 0;
 }
 .voip-call-route {
   display: flex;
   align-items: center;
   gap: 6px;
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   white-space: nowrap;
 }
 .voip-call-route svg {
@@ -248,9 +279,10 @@
   flex-shrink: 0;
 }
 .voip-call-table td > code {
-  font: 12px var(--mono);
+  font: 13px var(--mono);
   white-space: nowrap;
 }
+.voip-call-table td > .voip-call-start { white-space: normal; line-height: 1.6; }
 .voip-status {
   display: inline-flex;
   align-items: center;
@@ -260,7 +292,7 @@
   border-radius: 4px;
   padding: 3px 6px;
   background: #f3faf6;
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 .voip-status.is-error {
@@ -272,12 +304,12 @@
   display: block;
   margin-top: 4px;
   color: var(--voip-muted);
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .voip-only {
   color: var(--voip-blue);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
   min-height: 30px;
   padding: 0 4px;
@@ -289,7 +321,7 @@
   margin: 0;
   padding: 24px;
   text-align: center;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--voip-muted);
 }
 .voip-controls {
@@ -317,7 +349,7 @@
   min-height: 30px;
   color: var(--voip-muted);
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .voip-view-toggle button[aria-pressed="true"] {
   background: #fff;
@@ -334,7 +366,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--voip-muted);
 }
 .voip-time-controls select {
@@ -343,7 +375,7 @@
   color: var(--voip-ink);
   border-radius: 5px;
   height: 32px;
-  font-size: 12px;
+  font-size: 13px;
   padding: 0 24px 0 9px;
 }
 .voip-selected-legend {
@@ -352,7 +384,7 @@
   flex-wrap: wrap;
   gap: 8px;
   padding: 0 24px 12px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--voip-muted);
 }
 .voip-selected-legend > span {
@@ -367,7 +399,7 @@
   background: var(--call-tint);
   color: var(--call-color);
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .voip-selected-legend button > span {
   font-family: var(--mono);
@@ -392,17 +424,17 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 .voip-chart-title small {
   color: var(--voip-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   margin-left: 4px;
 }
 .voip-chart-note {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--voip-muted);
 }
 .voip-chart-scroll {
@@ -425,11 +457,11 @@
   justify-content: center;
   gap: 5px;
   padding: 12px 14px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--voip-ink);
 }
 .voip-time-heading small {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--voip-muted);
 }
 .voip-time-heading {
@@ -457,7 +489,7 @@
   border-radius: 5px;
   background: #e8edf5;
   color: #51667f;
-  font: 600 11px var(--mono);
+  font: 600 12px var(--mono);
 }
 .voip-workspace .voip-endpoint.is-left .voip-endpoint-letter {
   background: #e8f0ff;
@@ -471,7 +503,7 @@
 }
 .voip-workspace .voip-endpoint code {
   color: var(--voip-ink);
-  font: 600 11px var(--mono);
+  font: 600 12px var(--mono);
   overflow-wrap: anywhere;
   white-space: normal;
   text-overflow: clip;
@@ -530,7 +562,7 @@
   gap: 6px;
 }
 .voip-workspace .voip-message-time strong {
-  font: 500 11px var(--mono);
+  font: 500 12px var(--mono);
   color: var(--voip-ink);
   white-space: normal;
   overflow-wrap: anywhere;
@@ -538,7 +570,7 @@
   line-height: 1.5;
 }
 .voip-workspace .voip-message-time .sip-sequence-delta {
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   color: var(--voip-muted);
   white-space: nowrap;
 }
@@ -577,13 +609,13 @@
 }
 .voip-signal-label strong {
   background: #fff;
-  font: 600 11px var(--mono);
+  font: 600 12px var(--mono);
   overflow: hidden;
   text-overflow: ellipsis;
   padding: 1px 3px;
 }
 .voip-signal-call {
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   color: var(--call-color);
   background: var(--call-tint);
   border-radius: 3px;
@@ -591,7 +623,7 @@
 }
 .voip-signal-label em {
   font-style: normal;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   padding: 1px 4px;
   border: 1px solid currentColor;
@@ -604,7 +636,7 @@
   transform: translateX(-50%);
   background: #fff;
   color: var(--voip-muted);
-  font: 9px var(--mono);
+  font: 10px var(--mono);
   padding: 0 3px;
 }
 .voip-idle {
@@ -617,7 +649,7 @@
   height: 26px;
   border-block: 1px solid var(--voip-line);
   color: var(--voip-muted);
-  font: 10px var(--mono);
+  font: 11px var(--mono);
 }
 .voip-idle span {
   padding: 0 12px;
@@ -633,7 +665,7 @@
   border-top: 1px solid var(--voip-line);
   background: var(--voip-subtle);
   color: var(--voip-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 .voip-pagination {
   display: flex;
@@ -659,14 +691,14 @@
   min-height: 280px;
   text-align: center;
   color: var(--voip-muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 .voip-state > svg {
   color: var(--voip-blue);
 }
 .voip-state > strong {
   color: var(--voip-ink);
-  font-size: 15px;
+  font-size: 16px;
 }
 .voip-state button {
   min-height: 36px;
@@ -749,22 +781,22 @@
   border-radius: 4px;
   background: #e7f0ff;
   color: #2d62ad;
-  font: 700 10px var(--mono);
+  font: 700 11px var(--mono);
   letter-spacing: 0.4px;
 }
 .voip-inline-packet-id {
   color: #5d7087;
-  font: 500 11px var(--mono);
+  font: 500 12px var(--mono);
 }
 .voip-inline-detail-header strong {
   color: var(--voip-ink);
-  font: 650 13px var(--mono);
+  font: 650 14px var(--mono);
 }
 .voip-inline-summary {
   min-width: 0;
   overflow: hidden;
   color: var(--voip-muted);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -781,7 +813,7 @@
   border-radius: 5px;
   color: var(--voip-blue);
   background: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 .voip-inline-close:hover {
@@ -797,12 +829,12 @@
   border-bottom: 1px solid #e3ebf5;
   background: #f8fbff;
   color: #4d6682;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
 }
 .voip-inline-body-heading small {
   color: #8293a8;
-  font: 10px var(--mono);
+  font: 11px var(--mono);
 }
 .voip-inline-meta {
   display: grid;
@@ -821,13 +853,13 @@
 }
 .voip-inline-meta small {
   color: var(--voip-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .voip-inline-meta code,
 .voip-inline-meta strong {
   overflow: hidden;
   color: var(--voip-ink);
-  font: 600 12px var(--mono);
+  font: 600 13px var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -853,12 +885,12 @@
   border-bottom: 1px solid var(--voip-line);
   background: var(--voip-subtle);
   color: var(--voip-ink);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
 }
 .voip-inline-section-title small {
   color: var(--voip-muted);
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   font-weight: 500;
 }
 .voip-inline-layers {
@@ -882,7 +914,7 @@
   cursor: pointer;
   list-style: none;
   color: var(--voip-ink);
-  font-size: 12px;
+  font-size: 13px;
 }
 .voip-inline-field summary::-webkit-details-marker {
   display: none;
@@ -891,7 +923,7 @@
   content: "▸";
   width: 12px;
   color: #8b9caf;
-  font-size: 11px;
+  font-size: 12px;
 }
 .voip-inline-field[open] > summary::before {
   content: "▾";
@@ -907,7 +939,7 @@
   max-width: 58%;
   overflow: hidden;
   color: var(--voip-muted);
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -922,7 +954,7 @@
 .voip-inline-field.depth-2 summary,
 .voip-inline-field.depth-3 summary {
   color: var(--voip-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .voip-inline-bytes-panel pre {
   max-height: 270px;
@@ -932,14 +964,14 @@
   padding: 12px;
   color: #38526d;
   background: #fbfcfe;
-  font: 11px/1.7 var(--mono);
+  font: 12px/1.7 var(--mono);
   white-space: pre-wrap;
   word-break: break-word;
 }
 .voip-inline-state {
   padding: 18px 14px;
   color: var(--voip-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .voip-inline-state.is-error {
   color: #b42318;
@@ -962,11 +994,11 @@
 }
 .voip-inline-meta small {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: 11px;
 }
 .voip-inline-meta code,
 .voip-inline-meta strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 .voip-inline-compact-layers {
   padding: 3px 9px 4px;
@@ -998,7 +1030,7 @@
   position: absolute;
   margin-left: -11px;
   color: #8b9caf;
-  font-size: 10px;
+  font-size: 11px;
 }
 .voip-inline-layer-row[open] > .voip-inline-layer-summary::before {
   content: "▾";
@@ -1013,7 +1045,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--voip-ink);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1027,7 +1059,7 @@
   height: 18px;
   padding: 0 5px;
   border-radius: 3px;
-  font: 700 10px var(--mono);
+  font: 700 11px var(--mono);
   letter-spacing: 0.3px;
 }
 .voip-inline-layer-badge.is-ip {
@@ -1058,13 +1090,13 @@
   max-width: 220px;
   overflow: hidden;
   color: #687b90;
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .voip-inline-layer-expand {
   color: var(--voip-muted);
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   white-space: nowrap;
 }
 .voip-inline-sdp-hint {
@@ -1076,7 +1108,7 @@
   margin: -2px 0 4px 42px;
   overflow: hidden;
   color: #6a5780;
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1086,7 +1118,7 @@
   border-radius: 3px;
   color: #75419b;
   background: #f2eafa;
-  font-size: 9px;
+  font-size: 10px;
 }
 .voip-inline-layer-fields.is-expanded {
   display: grid;
@@ -1104,13 +1136,13 @@
 }
 .voip-inline-layer-fields small {
   color: #7b8a9b;
-  font: 10px var(--mono);
+  font: 11px var(--mono);
 }
 .voip-inline-layer-fields code {
   max-width: 260px;
   overflow: hidden;
   color: #465a70;
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1118,7 +1150,7 @@
   display: block;
   padding: 7px 2px;
   color: var(--voip-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .voip-inline-raw-sip {
   max-height: min(220px, 30vh);
@@ -1127,7 +1159,7 @@
   padding: 10px 12px 12px;
   color: #2f4965;
   background: #fff;
-  font: 10px/1.55 var(--mono);
+  font: 11px/1.55 var(--mono);
   white-space: pre-wrap;
   word-break: break-word;
   scrollbar-gutter: stable;
@@ -1138,7 +1170,7 @@
   min-height: 56px;
   padding: 10px 12px;
   color: var(--voip-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .voip-inline-state.is-error {
   color: #a23939;
@@ -1149,7 +1181,7 @@
     --voip-time-width: 150px;
   }
   .voip-call-route {
-    font-size: 10px;
+    font-size: 11px;
   }
   .voip-call-list {
     margin-inline: 12px;
@@ -1191,7 +1223,7 @@
     gap: 12px;
   }
   .voip-heading h1 {
-    font-size: 21px;
+    font-size: 22px;
   }
   .voip-packets-button {
     min-height: 44px;
@@ -1215,7 +1247,7 @@
   .voip-search input {
     width: 100%;
     min-height: 36px;
-    font-size: 17px;
+    font-size: 18px;
   }
   .voip-call-table {
     min-width: 560px;
@@ -1254,7 +1286,7 @@
   .voip-time-controls select {
     min-height: 44px;
     width: 100%;
-    font-size: 13px;
+    font-size: 14px;
   }
   .voip-selected-legend {
     padding-inline: 12px;

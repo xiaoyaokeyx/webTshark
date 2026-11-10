@@ -70,7 +70,7 @@ export async function run(
       size = 0,
       problem = null,
       done = false,
-      reader;
+      reading;
     let remainingMs = timeout,
       lastTick = Date.now();
     const timer = setInterval(
@@ -99,17 +99,28 @@ export async function run(
       if (stderr.length < 16000) stderr += chunk.toString();
     });
     if (onLine) {
-      reader = createInterface({ input: proc.stdout, crlfDelay: Infinity });
-      (async () => {
+      // Consume bounded stream chunks. readline's line-event queue can grow
+      // without bound while an asynchronous index writer waits for disk I/O.
+      reading = (async () => {
+        let pending = "";
         try {
-          for await (const line of reader) await onLine(line);
+          proc.stdout.setEncoding("utf8");
+          for await (const chunk of proc.stdout) {
+            const text = pending + chunk;
+            let start = 0, end;
+            while ((end = text.indexOf("\n", start)) >= 0) {
+              const line = text.slice(start, end);
+              await onLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+              start = end + 1;
+            }
+            pending = text.slice(start);
+          }
+          if (pending) await onLine(pending.endsWith("\r") ? pending.slice(0, -1) : pending);
         } catch (e) {
           problem = e;
           proc.kill("SIGKILL");
         }
-      })().then(() => {
-        reader.finished = true;
-      });
+      })();
     } else
       proc.stdout.on("data", (chunk) => {
         size += chunk.length;
@@ -128,8 +139,7 @@ export async function run(
       ),
     );
     proc.on("close", async (code) => {
-      while (reader && !reader.finished)
-        await new Promise((r) => setTimeout(r, 2));
+      await reading;
       finish(
         problem ||
           (code !== 0 || /Lua:.*(?:error|failed)/i.test(stderr)
@@ -1254,26 +1264,29 @@ const unescapeField = (s) =>
 function parsePacket(line, fields, config) {
   const cells = line.split("\t"),
     p = {};
-  fields.forEach((f, i) => (p[f] = unescapeField(cells[i] || "")));
-  const tcp = p["tcp.srcport"] !== "";
-  const udp = p["udp.srcport"] !== "";
+  // Most protocol fields are absent in any given frame. Build the sparse
+  // field map once, and only unescape values that actually contain escapes.
+  for (let i = 0; i < fields.length; i++) {
+    const cell = cells[i];
+    if (cell) p[fields[i]] = cell.includes("\\") ? unescapeField(cell) : cell;
+  }
+  const tcp = p["tcp.srcport"] != null;
+  const udp = p["udp.srcport"] != null;
   const out = {
     no: Number(p["frame.number"]),
     time: Number(p["frame.time_relative"]),
     epoch: Number(p["frame.time_epoch"]),
-    source: p["ip.src"] || p["ipv6.src"] || p["eth.src"],
-    destination: p["ip.dst"] || p["ipv6.dst"] || p["eth.dst"],
+    source: p["ip.src"] || p["ipv6.src"] || p["eth.src"] || "",
+    destination: p["ip.dst"] || p["ipv6.dst"] || p["eth.dst"] || "",
     ipVersion: p["ipv6.src"] ? 6 : p["ip.src"] ? 4 : null,
     protocol: p["_ws.col.Protocol"] || "DATA",
     length: Number(p["frame.len"]),
-    info: p["_ws.col.Info"],
+    info: p["_ws.col.Info"] || "",
     srcPort: number(p[tcp ? "tcp.srcport" : "udp.srcport"]),
     dstPort: number(p[tcp ? "tcp.dstport" : "udp.dstport"]),
     transport: tcp ? "TCP" : udp ? "UDP" : null,
     stream: number(p[tcp ? "tcp.stream" : "udp.stream"]),
-    fields: Object.fromEntries(
-      Object.entries(p).filter(([, value]) => value !== "" && value != null),
-    ),
+    fields: p,
     issue:
       p["tcp.analysis.retransmission"] || p["tcp.analysis.fast_retransmission"]
         ? "retransmission"
@@ -1284,14 +1297,14 @@ function parsePacket(line, fields, config) {
             : p["tcp.analysis.zero_window"]
               ? "zero_window"
               : null,
-    expert: p["_ws.expert.message"],
+    expert: p["_ws.expert.message"] || "",
   };
-  if (p["rtp.p_type"] !== "") {
+  if (p["rtp.p_type"] != null) {
     out.rtp = {
       pt: Number(p["rtp.p_type"]),
-      ssrc: p["rtp.ssrc"],
-      seq: Number(p["rtp.seq"]),
-      timestamp: Number(p["rtp.timestamp"]),
+      ssrc: p["rtp.ssrc"] || "",
+      seq: Number(p["rtp.seq"] || 0),
+      timestamp: Number(p["rtp.timestamp"] || 0),
     };
     const m = mappingFor(out, config) || staticCodec(out.rtp.pt);
     out.rtp.codec = m?.codec || p["webshark.rtp.codec"] || null;
@@ -1526,6 +1539,15 @@ export async function buildIndex(
   out.on("error", (e) => {
     writeError = e;
   });
+  let records = [], pendingBytes = 0;
+  const flushRecords = async () => {
+    if (writeError) throw writeError;
+    if (!records.length) return;
+    const chunk = records.join("");
+    records = [];
+    pendingBytes = 0;
+    if (!out.write(chunk)) await once(out, "drain");
+  };
   const started = performance.now();
   try {
     await run(
@@ -1550,14 +1572,18 @@ export async function buildIndex(
           updateSummary(summary, p);
           const record = JSON.stringify(p) + "\n";
           if (writeError) throw writeError;
-          if (!out.write(record)) await once(out, "drain");
-          byteOffset += Buffer.byteLength(record);
+          records.push(record);
+          const recordBytes = Buffer.byteLength(record);
+          byteOffset += recordBytes;
+          pendingBytes += recordBytes;
+          if (pendingBytes >= 256 * 1024) await flushRecords();
           if (summary.count % 100 === 0) offsets.push(byteOffset);
           if (progress) capture.processed = summary.count;
           const completedSegment = byteOffset - segmentStart >= segmentBytes;
           // Publish the first page immediately, independently of segment size.
           if (progress && (completedSegment || summary.count === 100 ||
               (summary.count > 100 && performance.now() - lastPublished >= 250))) {
+            await flushRecords();
             await new Promise((resolve, reject) =>
               out.write("", (error) => (error ? reject(error) : resolve())),
             );
@@ -1587,6 +1613,7 @@ export async function buildIndex(
         },
       },
     );
+    await flushRecords();
     out.end();
     await once(out, "finish");
     if (progress) {

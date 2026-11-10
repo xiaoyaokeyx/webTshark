@@ -45,6 +45,7 @@ export function ContextMenu({
   onColumn,
   onCopy,
   onMark,
+  onTimeReference,
 }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -141,6 +142,15 @@ export function ContextMenu({
         应用为列
       </button>
       <div className="context-divider" />
+      <button
+        role="menuitem"
+        onClick={() => {
+          onTimeReference?.(context.packet);
+          onClose();
+        }}
+      >
+        设为时间参考点（0 秒）
+      </button>
       {context.packet?.transport && (
         <button
           role="menuitem"

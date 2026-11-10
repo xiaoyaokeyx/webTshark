@@ -5,6 +5,8 @@ import {
   sipFlowRows,
   sipEndpoints,
   sipMessage,
+  sipDisplayFilter,
+  selectSipCalls,
 } from "../src/sipFlow.js";
 
 const packet = (
@@ -102,4 +104,35 @@ test("a failed re-INVITE does not overwrite an already connected call", () => {
     packet(5, 1.1, "reinvite", "B", "A", "488 Not Acceptable Here"),
   ]);
   assert.equal(calls[0].status, "已接通");
+});
+
+test("VoIP filters intersect SIP without changing boolean precedence or ASR macros", () => {
+  assert.equal(sipDisplayFilter(""), "sip");
+  assert.equal(sipDisplayFilter(" sip "), "sip");
+  assert.equal(sipDisplayFilter("sip_mrcp.port=20000 || tcp"), "(sip_mrcp.port=20000 || tcp) && sip");
+});
+
+test("session search, status and sorting compose without changing stable call identities", () => {
+  const calls = buildSipCalls([
+    packet(1, 1, "first", "A", "B", "INVITE sip:b"),
+    packet(2, 2, "second", "C", "D", "INVITE sip:d"),
+    packet(3, 3, "first", "B", "A", "486 Busy Here"),
+    packet(4, 5, "second", "D", "C", "200 OK"),
+  ]);
+  assert.deepEqual(selectSipCalls(calls, { sort: "newest" }).map(c => c.index), [1, 0]);
+  assert.deepEqual(selectSipCalls(calls, { sort: "duration" }).map(c => c.index), [1, 0]);
+  assert.equal(selectSipCalls(calls, { search: " SECOND ", status: "已接通" }).length, 1);
+  assert.equal(selectSipCalls(calls, { search: "first", status: "已接通" }).length, 0);
+  assert.deepEqual(calls.map(c => c.index), [0, 1]);
+});
+
+test("authentication challenges and non-call SIP transactions are not labelled failed calls", () => {
+  const calls = buildSipCalls([
+    packet(1, 0, "auth", "A", "B", "INVITE sip:b"),
+    packet(2, 1, "auth", "B", "A", "407 Proxy Authentication Required"),
+    packet(3, 2, "register", "A", "B", "REGISTER sip:b", "REGISTER"),
+    packet(4, 3, "register", "B", "A", "200 OK", "REGISTER"),
+    packet(5, 4, "options", "A", "B", "OPTIONS sip:b", "OPTIONS"),
+  ]);
+  assert.deepEqual(calls.map(c => c.status), ["认证中", "事务完成", "仅信令"]);
 });

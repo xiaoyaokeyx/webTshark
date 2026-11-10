@@ -100,7 +100,7 @@
   border-radius: 5px;
   background: #fff;
   color: #526a8d;
-  font-size: 12px;
+  font-size: 13px;
 }
 .batch-extra[open] {
   flex-basis: 100%;
@@ -264,7 +264,7 @@
 }
 .feature-panel .form-grid label {
   min-width: 0;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 .form-grid > * {
@@ -396,7 +396,7 @@
     gap: 6px;
   }
   .page-heading h1 {
-    font-size: 22px;
+    font-size: 23px;
   }
   .page-actions {
     width: 100%;
@@ -473,7 +473,7 @@
     padding: 16px;
   }
   .feature-modal .modal-heading h2 {
-    font-size: 17px;
+    font-size: 18px;
     line-height: 1.5;
   }
   .feature-modal .feature-panel {

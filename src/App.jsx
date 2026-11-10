@@ -165,12 +165,18 @@ const columnById = new Map(
 );
 const timeFormats = [
   ["relative", "Seconds Since Beginning of Capture"],
+  ["reference", "Seconds Since Time Reference"],
+  ["deltaDisplayed", "Seconds Since Previous Displayed Packet"],
+  ["deltaCaptured", "Seconds Since Previous Captured Packet"],
   ["epoch", "Seconds Since 1970-01-01 (Epoch)"],
   ["local", "Date and Time of Day (Local)"],
   ["utc", "UTC Date and Time"],
 ];
 const timeHeaderLabels = new Map([
   ["relative", "Time"],
+  ["reference", "Ref Time"],
+  ["deltaDisplayed", "Delta Time"],
+  ["deltaCaptured", "Capture Delta"],
   ["epoch", "Epoch"],
   ["local", "Date & Time"],
   ["utc", "UTC Date & Time"],
@@ -278,8 +284,20 @@ function columnValue(packet, column) {
   if (column.id === "rtp.timestamp") return packet.rtp?.timestamp;
   return packet.fields?.[column.field] ?? "";
 }
-function formatPacketTime(packet, format) {
+function formatPacketTime(packet, format, reference = null) {
   if (format === "relative") return Number(packet.time).toFixed(6);
+  if (format === "reference")
+    return reference?.captureId && Number.isFinite(reference.time)
+      ? (Number(packet.time) - reference.time).toFixed(6)
+      : Number(packet.time).toFixed(6);
+  if (format === "deltaDisplayed")
+    return Number.isFinite(packet.deltaDisplayed)
+      ? packet.deltaDisplayed.toFixed(6)
+      : "—";
+  if (format === "deltaCaptured")
+    return Number.isFinite(packet.deltaCaptured)
+      ? packet.deltaCaptured.toFixed(6)
+      : "—";
   if (format === "epoch") return Number(packet.epoch).toFixed(6);
   const epoch = Number(packet.epoch);
   if (!Number.isFinite(epoch)) return "—";
@@ -632,6 +650,80 @@ function TrafficChart({ summary, large = false }) {
     </div>
   );
 }
+function MultiTrafficChart({ capture, summary, onLocateTime }) {
+  const [filters, setFilters] = useState(["sip", "rtp"]);
+  const [curves, setCurves] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [activeCurve, setActiveCurve] = useState("");
+  const colors = ["#3670ef", "#8b62c8", "#20a580"];
+  async function refresh() {
+    setBusy(true);
+    setError("");
+    try {
+      const selected = filters.map((filter) => filter.trim()).filter(Boolean);
+      const next = await Promise.all(selected.map((filter) =>
+        api(capturePath(capture.id, `/traffic?filter=${encodeURIComponent(filter)}`)),
+      ));
+      setCurves(next);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const series = [
+    { filter: "全部", activity: summary.activity || [], interval: summary.interval || .01 },
+    ...curves,
+  ];
+  const maximum = Math.max(1, ...series.flatMap((curve) =>
+    curve.activity.map((point) => point.bytes / Math.max(.000001, curve.interval)),
+  ));
+  const duration = Math.max(.001, summary.duration);
+  const curvePoints = (curve) => {
+    const interval = Math.max(.000001, curve.interval);
+    const x = (time) => Math.min(1000, Math.max(0, time / duration * 1000));
+    const points = [];
+    let previous = null;
+    for (const point of curve.activity) {
+      if (previous == null || point.time - previous > interval * 1.5) {
+        if (previous != null) points.push(`${x(previous + interval)},220`);
+        points.push(`${x(point.time)},220`);
+      }
+      points.push(`${x(point.time)},${220 - Math.min(210, point.bytes / interval / maximum * 210)}`);
+      previous = point.time;
+    }
+    if (previous != null) points.push(`${x(previous + interval)},220`);
+    return points.join(" ");
+  };
+  return <section className="traffic-timeline-card multi-traffic-card">
+    <div className="traffic-timeline-card-heading"><div><strong>多条件流量图</strong><span>每条线使用独立显示过滤器；纵轴为字节/秒</span></div><code>{sizeLabel(maximum)}/s</code></div>
+    <div className="multi-traffic-controls">
+      {filters.map((filter, index) => <label key={index}>曲线 {index + 1}
+        <input aria-label={`曲线 ${index + 1} 过滤器`} value={filter} onChange={(event) =>
+          setFilters((items) => items.map((item, i) => i === index ? event.target.value : item))} placeholder="例如 sip 或 rtp" />
+        <button type="button" onClick={() => setFilters((items) => items.filter((_, i) => i !== index))} aria-label={`删除曲线 ${index + 1}`}>×</button>
+      </label>)}
+      {filters.length < 3 && <button className="button secondary" onClick={() => setFilters((items) => [...items, ""])}>添加曲线</button>}
+      <label>定位曲线<select aria-label="定位曲线" value={activeCurve} onChange={(event) => setActiveCurve(event.target.value)}>
+        <option value="">全部</option>{curves.map((curve) => <option key={curve.filter} value={curve.filter}>{curve.filter}</option>)}
+      </select></label>
+      <button className="button primary" disabled={busy} onClick={refresh}>{busy ? "计算中…" : "应用过滤器"}</button>
+    </div>
+    {error && <p className="filter-error">{error}</p>}
+    <div className="multi-traffic-plot">
+      <svg viewBox="0 0 1000 230" preserveAspectRatio="none" role="button" tabIndex={0} aria-label="点击时间点定位数据包" onClick={(event) => {
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onLocateTime?.(Math.min(duration, Math.max(0, (event.clientX - bounds.left) / bounds.width * duration)), activeCurve);
+      }} onKeyDown={(event) => { if (event.key === "Enter") onLocateTime?.(duration / 2, activeCurve); }}>
+        {[0, .25, .5, .75, 1].map((ratio) => <line key={ratio} x1="0" x2="1000" y1={220 - ratio * 210} y2={220 - ratio * 210} stroke="#e2ebf5" />)}
+        {series.map((curve, index) => <polyline key={curve.filter || index} fill="none" stroke={colors[index]} strokeWidth="2" vectorEffect="non-scaling-stroke" points={curvePoints(curve)} />)}
+      </svg>
+      <div className="multi-traffic-axis">{Array.from({ length: 6 }, (_, i) => <span key={i}>{(duration * i / 5).toFixed(2)} s</span>)}</div>
+    </div>
+    <div className="multi-traffic-legend">{series.map((curve, i) => <span key={i}><i style={{ background: colors[i] }} />{curve.filter || "全部"}（{curve.count ?? summary.count} 包）</span>)}</div>
+  </section>;
+}
 function highlighted(text, needle) {
   if (!needle) return text;
   const parts = [],
@@ -708,6 +800,7 @@ export default function App() {
     [timeFormat, setTimeFormat] = useState(() =>
       readStorage("webshark-time-format", "relative"),
     ),
+    [timeReference, setTimeReference] = useState(() => readStorage("webshark-time-reference", null)),
     [sort, setSort] = useState({ key: "no", direction: "asc" }),
     [compareMode, setCompareMode] = useState(false),
     [compareSelection, setCompareSelection] = useState([]),
@@ -768,6 +861,8 @@ export default function App() {
   const packetFocus = view === "packets" && (ready || parsing);
   const title = nav.find(([id]) => id === view)?.[1] || "数据包分析";
   const displayRows = rows;
+  const displayPacketTime = (packet, format = timeFormat) =>
+    formatPacketTime(packet, format, timeReference?.captureId === capture?.id ? timeReference : null);
   useEffect(() => {
     try {
       localStorage.setItem("webshark-columns", JSON.stringify(columnState));
@@ -779,6 +874,10 @@ export default function App() {
       localStorage.setItem("webshark-page-size", String(pageSize));
     } catch {}
   }, [columnState, columnWidths, timeFormat, pageSize]);
+  useEffect(() => {
+    try { localStorage.setItem("webshark-time-reference", JSON.stringify(timeReference)); }
+    catch {}
+  }, [timeReference]);
   useEffect(() => {
     const move = (event) => {
       const active = columnResize.current;
@@ -1068,6 +1167,7 @@ export default function App() {
   function clearCapture() {
     streamSerial.current++;
     setCapture(null);
+    setTimeReference(null);
     setSipSessionCount(null);
     setRows([]);
     setDetail(null);
@@ -1150,7 +1250,7 @@ export default function App() {
     api(
       capturePath(
         capture.id,
-        `/packets?filter=${encodeURIComponent(filter)}&page=${query.page}&size=${pageSize}&sort=${encodeURIComponent(columnById.get(sort.key)?.field || "frame.number")}&direction=${sort.direction}${requestedFields.map((field) => `&field=${encodeURIComponent(field)}`).join("")}`,
+        `/packets?filter=${encodeURIComponent(filter)}&page=${query.page}&size=${pageSize}&sort=${encodeURIComponent(columnById.get(sort.key)?.field || "frame.number")}&direction=${sort.direction}&capturedDelta=${timeFormat === "deltaCaptured" ? 1 : 0}${requestedFields.map((field) => `&field=${encodeURIComponent(field)}`).join("")}`,
       ),
       { signal: controller.signal },
     )
@@ -1185,6 +1285,7 @@ export default function App() {
     ready,
     query,
     pageSize,
+    timeFormat,
     sort,
     requestedFields.join(","),
     markedOnly,
@@ -1679,7 +1780,7 @@ export default function App() {
                   const column = columnById.get(key);
                   return `"${String(
                     key === "time"
-                      ? formatPacketTime(p, timeFormat)
+                      ? displayPacketTime(p)
                       : columnValue(p, column),
                   ).replaceAll('"', '""')}"`;
                 })
@@ -2206,7 +2307,7 @@ export default function App() {
             </div>
           )}
           {parsing && (
-            <ParsingPreview key={`${capture.id}:${capture.revision}`} capture={capture} timeFormat={timeFormat} formatTime={formatPacketTime} />
+            <ParsingPreview key={`${capture.id}:${capture.revision}`} capture={capture} timeFormat={timeFormat} formatTime={displayPacketTime} />
           )}
           {capture && ["error", "cancelled"].includes(capture.status) && (
             <div className="service-error" role="alert">
@@ -2759,7 +2860,7 @@ export default function App() {
                                 }
                                 title={String(
                                   column.id === "time"
-                                    ? formatPacketTime(p, timeFormat)
+                                    ? displayPacketTime(p)
                                     : (columnValue(p, column) ?? ""),
                                 )}
                               >
@@ -2771,7 +2872,7 @@ export default function App() {
                                     {p.no}
                                   </span>
                                 ) : column.id === "time" ? (
-                                  formatPacketTime(p, timeFormat)
+                                  displayPacketTime(p)
                                 ) : column.id === "protocol" ? (
                                   <Protocol name={p.protocol} />
                                 ) : (
@@ -2877,9 +2978,9 @@ export default function App() {
               key={capture.id}
               capture={capture}
               filter={applied}
-              timeFormat={timeFormat}
+              timeFormat={["deltaDisplayed", "deltaCaptured"].includes(timeFormat) ? "relative" : timeFormat}
               onTimeFormatChange={setTimeFormat}
-              formatTime={formatPacketTime}
+              formatTime={displayPacketTime}
               onPacket={(packet) => {
                 // SIP flow messages expand their packet detail inline; keep the
                 // current flow view and only sync the selected packet state.
@@ -3211,6 +3312,11 @@ export default function App() {
           onColumn={(field, label) => addColumn(field, label)}
           onCopy={copy}
           onMark={mark}
+          onTimeReference={(packet) => {
+            setTimeReference({ captureId: capture.id, no: packet.no, time: Number(packet.time) });
+            setTimeFormat("reference");
+            setToast(`已将数据包 #${packet.no} 设为时间参考点`);
+          }}
         />
       )}
       {toast && (
@@ -3573,6 +3679,7 @@ export default function App() {
                 </option>
               ))}
             </select>
+            {timeFormat === "reference" && <small className="setting-help">{timeReference?.captureId === capture?.id ? `参考点：数据包 #${timeReference.no}` : "当前文件未设置参考点，暂按抓包起点显示；可右击数据包设置。"}</small>}
             <div className="columns-heading">
               <span>当前列</span>
               <small>拖动整行调整顺序 · ↑↓ 微调 · 表头边界可拖拽调整列宽</small>
@@ -3821,11 +3928,11 @@ export default function App() {
                           : label,
                       left =
                         id === "time"
-                          ? formatPacketTime(comparePackets[0], timeFormat)
+                          ? displayPacketTime(comparePackets[0])
                           : columnValue(comparePackets[0], column),
                       right =
                         id === "time"
-                          ? formatPacketTime(comparePackets[1], timeFormat)
+                          ? displayPacketTime(comparePackets[1])
                           : columnValue(comparePackets[1], column),
                       different = String(left ?? "") !== String(right ?? "");
                     return (
@@ -3908,6 +4015,18 @@ export default function App() {
               </div>
               <TrafficChart summary={summary} large />
             </section>
+            <MultiTrafficChart capture={capture} summary={summary} onLocateTime={async (time, filter) => {
+              try {
+                const result = await api(capturePath(capture.id,
+                  `/locate?${new URLSearchParams({ mode: "time", time: String(time), filter, size: String(pageSize) })}`));
+                setExpression(filter);
+                setApplied(filter);
+                setQuery({ filter, page: result.page });
+                setSelectedNo(result.no);
+                setView("packets");
+                setModal(null);
+              } catch (e) { setToast(e.message); }
+            }} />
             <div className="traffic-timeline-legend">
               <span>
                 <i className="traffic-timeline-legend-swatch" />

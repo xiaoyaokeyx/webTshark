@@ -178,7 +178,7 @@
 }
 .packet-focus .reopen-tab-button::after {
   content: "↶";
-  font-size: 18px;
+  font-size: 19px;
 }
 .packet-focus .reopen-tab-button:disabled {
   display: none;
@@ -243,7 +243,7 @@
 .packet-focus-content .page-actions .button {
   min-height: 28px;
   padding: 4px 9px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .packet-focus-content .capture-top {
   padding: 0;
@@ -267,7 +267,7 @@
   min-width: 0;
 }
 .packet-focus-content .capture-file-title strong {
-  font-size: 12px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -281,7 +281,7 @@
   white-space: nowrap;
   margin: 0;
   color: #7b8b9f;
-  font-size: 10px;
+  font-size: 11px;
 }
 .packet-focus-content .capture-type,
 .packet-focus-content .capture-close-button {
@@ -304,7 +304,7 @@
   padding: 0 7px;
 }
 .packet-focus-content .filter-input input {
-  font-size: 11px;
+  font-size: 12px;
 }
 .packet-focus-content .apply-button {
   min-height: 25px;
@@ -330,7 +330,7 @@
   gap: 6px;
 }
 .packet-focus-content .packet-panel .panel-title h2 {
-  font-size: 12px;
+  font-size: 13px;
 }
 .packet-focus-content .packet-panel .table-footer {
   min-height: 32px;
@@ -367,7 +367,7 @@
   border-radius: 5px;
   background: #fff;
   color: #5b7192;
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 .packet-menu-trigger:hover,
@@ -396,7 +396,7 @@
   width: 100%;
   min-height: 33px;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: 13px;
   text-align: left;
   border-radius: 4px;
 }
@@ -456,7 +456,7 @@
   padding: 4px 8px;
   gap: 5px;
   border: 1px solid #dbe4f1;
-  font-size: 11px;
+  font-size: 12px;
 }
 .packet-menu-popup .filter-save-actions .icon-button::after {
   content: attr(aria-label);
@@ -500,7 +500,7 @@
     max-width: 150px;
   }
   .packet-focus-content .capture-file-title > .packet-file-stats {
-    font-size: 9px;
+    font-size: 10px;
   }
   .packet-focus-content .packet-panel .panel-toolbar {
     flex-wrap: nowrap;

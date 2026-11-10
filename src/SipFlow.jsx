@@ -19,16 +19,21 @@ import {
   endpointLetter,
   sipEndpoints,
   sipFlowRows,
+  sipDisplayFilter,
+  selectSipCalls,
 } from "./sipFlow.js";
 import "./sipFlow.css";
 
 const timeOptions = [
   ["relative", "相对抓包时间"],
+  ["reference", "距参考包时间"],
   ["local", "本地日期与时间"],
   ["utc", "UTC 日期与时间"],
   ["epoch", "Epoch 时间"],
 ];
 const PAGE_SIZE = 150;
+const FETCH_SIZE = 500;
+const CALL_PAGE_SIZE = 50;
 
 function sipRawText(detail) {
   const sipLayer = (detail?.layers || []).find(
@@ -368,6 +373,12 @@ export default function SipFlow({
   const [hidden, setHidden] = useState(new Set()),
     [search, setSearch] = useState("");
   const [showChart, setShowChart] = useState(false);
+  const [status, setStatus] = useState("all");
+  const [sort, setSort] = useState("start");
+  const [callPage, setCallPage] = useState(0);
+  const [groupPage, setGroupPage] = useState(0);
+  const selectAllRef = useRef(null);
+  const chartRef = useRef(null);
   const [mode, setMode] = useState("merged"),
     [gap, setGap] = useState(2);
   const [expandedPacketNo, setExpandedPacketNo] = useState(null),
@@ -382,14 +393,17 @@ export default function SipFlow({
     setProgress(0);
     setHidden(new Set());
     setShowChart(false);
+    setSearch("");
+    setStatus("all");
+    setCallPage(0);
     setExpandedPacketNo(null);
-    const flowFilter = filter.trim() || "sip";
+    const flowFilter = sipDisplayFilter(filter);
     (async () => {
       const load = (page) =>
         api(
           capturePath(
             capture.id,
-            `/packets?filter=${encodeURIComponent(flowFilter)}&page=${page}&size=${PAGE_SIZE}`,
+            `/packets?filter=${encodeURIComponent(flowFilter)}&page=${page}&size=${FETCH_SIZE}`,
           ),
           {
             signal: controller.signal,
@@ -397,6 +411,7 @@ export default function SipFlow({
         );
       const first = await load(0),
         all = [...first.packets];
+      if (controller.signal.aborted) return;
       setProgress(all.length);
       const pages = Math.ceil(first.total / first.pageSize);
       for (let page = 1; page < pages; page += 4) {
@@ -450,19 +465,33 @@ export default function SipFlow({
   }, [calls.length, error, loading, onSessionCount]);
   const matching = useMemo(
     () =>
-      calls.filter((call) =>
-        `${call.callId} ${call.endpoints.join(" ")} ${call.status}`
-          .toLowerCase()
-          .includes(search.toLowerCase().trim()),
-      ),
-    [calls, search],
+      selectSipCalls(calls, { search, status, sort }),
+    [calls, search, status, sort],
   );
+  const statusCounts = useMemo(() => {
+    const counts = new Map();
+    calls.forEach((call) => counts.set(call.status, (counts.get(call.status) || 0) + 1));
+    return counts;
+  }, [calls]);
+  const callPages = Math.max(1, Math.ceil(matching.length / CALL_PAGE_SIZE));
+  const safeCallPage = Math.min(callPage, callPages - 1);
+  const visibleCalls = matching.slice(safeCallPage * CALL_PAGE_SIZE, (safeCallPage + 1) * CALL_PAGE_SIZE);
+  useEffect(() => setCallPage(0), [search, status, sort]);
   const selected = useMemo(
     () => matching.filter((call) => !hidden.has(call.key)),
     [matching, hidden],
   );
   const allSelected =
     matching.length > 0 && selected.length === matching.length;
+  const groupPages = Math.max(1, Math.ceil(selected.length / 10));
+  const safeGroupPage = Math.min(groupPage, groupPages - 1);
+  useEffect(() => setGroupPage(0), [search, status, sort, hidden]);
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = selected.length > 0 && !allSelected;
+  }, [selected.length, allSelected]);
+  useEffect(() => {
+    if (showChart) chartRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [showChart]);
   const endpoints = useMemo(
     () => sipEndpoints(calls.flatMap((call) => call.packets)),
     [calls],
@@ -505,7 +534,7 @@ export default function SipFlow({
         </span>
         <span>
           <Network size={15} />
-          <strong>{sipEndpoints(packets).length}</strong> 个端点
+          <strong>{endpoints.length}</strong> 个端点
         </span>
         <span>
           <Layers3 size={15} />
@@ -531,8 +560,8 @@ export default function SipFlow({
       ) : !calls.length ? (
         <div className="voip-state">
           <PhoneCall size={25} />
-          <strong>当前抓包没有 SIP 信令</strong>
-          <span>打开包含 SIP 的 PCAP 文件后，即可查看多端点通话时序。</span>
+          <strong>{filter.trim() ? "当前过滤结果没有 SIP 信令" : "当前抓包没有 SIP 信令"}</strong>
+          <span>{filter.trim() ? "返回数据包列表调整过滤器后重试。" : "打开包含 SIP 的 PCAP 文件后，即可查看多端点通话时序。"}</span>
           <button onClick={onOpenPackets}>查看数据包</button>
         </div>
       ) : (
@@ -542,7 +571,7 @@ export default function SipFlow({
               <span>
                 通话会话{" "}
                 <small>
-                  {selected.length} / {calls.length} 已选择
+                  {selected.length} / {matching.length} 已选择
                 </small>
               </span>
               <button
@@ -563,14 +592,34 @@ export default function SipFlow({
                 />
               </label>
             </div>
+            <div className="voip-call-filters">
+              <label>会话状态
+                <select aria-label="筛选会话状态" value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="all">全部状态 · {calls.length}</option>
+                  {[...statusCounts].map(([value, count]) => <option key={value} value={value}>{value} · {count}</option>)}
+                </select>
+              </label>
+              <label>排序
+                <select aria-label="会话排序" value={sort} onChange={(e) => setSort(e.target.value)}>
+                  <option value="start">开始时间：从早到晚</option>
+                  <option value="newest">开始时间：从晚到早</option>
+                  <option value="duration">时间跨度：从长到短</option>
+                  <option value="packets">信令数量：从多到少</option>
+                </select>
+              </label>
+              {(search || status !== "all") && <button onClick={() => { setSearch(""); setStatus("all"); }}>清除筛选</button>}
+              <span>匹配 {matching.length} 个会话</span>
+            </div>
             <div className="voip-call-table-wrap">
               <table className="voip-call-table">
                 <thead>
                   <tr>
                     <th>
                       <input
+                        ref={selectAllRef}
                         type="checkbox"
                         aria-label="显示全部匹配会话"
+                        title="选择或取消全部匹配会话（含其他页）"
                         checked={allSelected}
                         onChange={() =>
                           setHidden((current) => {
@@ -588,16 +637,16 @@ export default function SipFlow({
                     <th>会话 / Call-ID</th>
                     <th>端点</th>
                     <th>信令</th>
-                    <th>时间跨度</th>
+                    <th>开始时间 / 跨度</th>
                     <th>状态</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {matching.map((call) => (
+                  {visibleCalls.map((call) => (
                     <tr
                       key={call.key}
-                      className={`voip-call-${call.index % 6} ${hidden.has(call.key) ? "is-muted" : ""}`}
+                      className={`voip-call-${call.index % 6} ${hidden.has(call.key) ? "is-muted" : "is-selected"}`}
                     >
                       <td>
                         <input
@@ -628,11 +677,12 @@ export default function SipFlow({
                       </td>
                       <td>{call.packets.length}</td>
                       <td>
-                        <code>{call.duration.toFixed(3)} s</code>
+                        <code className="voip-call-start" title={formatTime(call.packets[0], timeFormat)}>{formatTime(call.packets[0], timeFormat)}</code>
+                        <small>跨度 {call.duration.toFixed(3)} s</small>
                       </td>
                       <td>
                         <span
-                          className={`voip-status ${call.status === "呼叫失败" ? "is-error" : ""}`}
+                          className={`voip-status ${call.status.endsWith("失败") ? "is-error" : ["认证中", "振铃中", "建立中"].includes(call.status) ? "is-pending" : ["已取消", "仅信令"].includes(call.status) ? "is-neutral" : ""}`}
                         >
                           {call.status === "已结束" && <Check size={11} />}
                           {call.status}
@@ -642,9 +692,9 @@ export default function SipFlow({
                             ? `认证 ${call.diagnostics.authChallenges} 次`
                             : ""}
                           {call.diagnostics?.connectedMs != null
-                            ? ` · 接通 ${call.diagnostics.connectedMs.toFixed(0)} ms`
+                            ? `${call.diagnostics?.authChallenges ? " · " : ""}接通 ${call.diagnostics.connectedMs.toFixed(0)} ms`
                             : call.diagnostics?.finalCode
-                              ? ` · 最终 ${call.diagnostics.finalCode}`
+                              ? `${call.diagnostics?.authChallenges ? " · " : ""}最终 ${call.diagnostics.finalCode}`
                               : ""}
                         </small>
                       </td>
@@ -653,6 +703,7 @@ export default function SipFlow({
                           className="voip-only"
                           aria-label={`会话 ${call.index + 1} 时序图`}
                           onClick={() => {
+                            if (showChart) chartRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
                             setShowChart(true);
                             setExpandedPacketNo(null);
                             setHidden(
@@ -672,6 +723,14 @@ export default function SipFlow({
                 </tbody>
               </table>
             </div>
+            {matching.length > 0 && <footer className="voip-call-pagination">
+              <span>{safeCallPage * CALL_PAGE_SIZE + 1}–{Math.min((safeCallPage + 1) * CALL_PAGE_SIZE, matching.length)} / {matching.length} 个会话 · 每页 {CALL_PAGE_SIZE} 个</span>
+              <div>
+                <button aria-label="上一页会话" disabled={safeCallPage === 0} onClick={() => setCallPage(safeCallPage - 1)}><ChevronLeft size={16} /></button>
+                <span>{safeCallPage + 1} / {callPages}</span>
+                <button aria-label="下一页会话" disabled={safeCallPage >= callPages - 1} onClick={() => setCallPage(safeCallPage + 1)}><ChevronRight size={16} /></button>
+              </div>
+            </footer>}
             {!matching.length && (
               <p className="voip-no-match">
                 没有匹配的会话，请尝试其他 IP 或 Call-ID。
@@ -680,7 +739,7 @@ export default function SipFlow({
           </div>
           {showChart && (
             <>
-              <div className="voip-controls">
+              <div className="voip-controls" ref={chartRef}>
                 <div
                   className="voip-view-toggle"
                   role="group"
@@ -761,7 +820,15 @@ export default function SipFlow({
                 />
               ) : (
                 <div className="voip-grouped-charts">
-                  {selected.map((call) => (
+                  {groupPages > 1 && <div className="voip-call-pagination">
+                    <span>分组时序 · 每页 10 个会话</span>
+                    <div>
+                      <button aria-label="上一组时序图" disabled={safeGroupPage === 0} onClick={() => setGroupPage(safeGroupPage - 1)}><ChevronLeft size={16} /></button>
+                      <span>{safeGroupPage + 1} / {groupPages}</span>
+                      <button aria-label="下一组时序图" disabled={safeGroupPage >= groupPages - 1} onClick={() => setGroupPage(safeGroupPage + 1)}><ChevronRight size={16} /></button>
+                    </div>
+                  </div>}
+                  {selected.slice(safeGroupPage * 10, (safeGroupPage + 1) * 10).map((call) => (
                     <FlowChart
                       key={call.key}
                       calls={[call]}

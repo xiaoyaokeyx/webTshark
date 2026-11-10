@@ -26,7 +26,7 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 13px;
   flex: 1;
   text-align: left;
 }
@@ -46,7 +46,7 @@
   border: 1px solid #dbe4f1;
   border-radius: 5px;
   background: white;
-  font-size: 12px;
+  font-size: 13px;
 }
 .feature-launcher button:hover,
 .batch-toolbar button:hover {
@@ -65,7 +65,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .batch-toolbar input {
   width: 66px;
@@ -86,7 +86,7 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  font-size: 12px;
+  font-size: 13px;
   color: #526b8e;
 }
 .feature-panel select,
@@ -104,7 +104,7 @@
 }
 .feature-panel textarea,
 .feature-panel pre {
-  font: 12px/1.65 var(--mono);
+  font: 13px/1.65 var(--mono);
 }
 .feature-panel pre {
   white-space: pre-wrap;
@@ -138,7 +138,7 @@
   flex: 1 1 260px;
   align-self: center;
   color: #607895;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.6;
 }
 .multi-call-builder button {
@@ -158,7 +158,7 @@
   gap: 7px;
 }
 .task-item > span {
-  font-size: 12px;
+  font-size: 13px;
   color: #6c809e;
 }
 .finding {
@@ -167,7 +167,7 @@
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  font-size: 13px;
+  font-size: 14px;
 }
 .finding > span {
   flex: 1;
@@ -201,7 +201,7 @@
     gap: 5px;
   }
   .batch-toolbar {
-    font-size: 11px;
+    font-size: 12px;
   }
   .feature-panel .modal-actions {
     flex-wrap: wrap;

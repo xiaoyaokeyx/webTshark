@@ -127,6 +127,10 @@ export async function diagnose(index) {
             maxBurstLoss: 0,
             lossBursts: [],
             timeline: [],
+            sampleStep: 1,
+            anomalies: [],
+            jitter: 0,
+            previousTransit: null,
             count: 0,
             previousSeq: null,
           }),
@@ -137,6 +141,24 @@ export async function diagnose(index) {
             stats.previousSeq == null
               ? 0
               : (p.rtp.seq - stats.previousSeq + 65536) % 65536;
+        const transit = stats.clockRate
+          ? p.time * stats.clockRate - Number(p.rtp.timestamp)
+          : null;
+        if (Number.isFinite(transit) && stats.previousTransit != null)
+          stats.jitter += (Math.abs(transit - stats.previousTransit) - stats.jitter) / 16;
+        if (Number.isFinite(transit)) stats.previousTransit = transit;
+        const status = stats.count === 0 ? "start"
+          : seqGap === 0 ? "duplicate"
+          : seqGap > 32768 ? "reordered"
+          : seqGap > 1 && seqGap < 3000 ? `gap:${seqGap - 1}`
+          : gap > 100 ? "late" : "ok";
+        const observation = {
+          no: p.no, time: p.time, gapMs: gap,
+          jitterMs: stats.clockRate ? stats.jitter * 1000 / stats.clockRate : null,
+          sequence: p.rtp.seq, pt: p.rtp.pt, status,
+        };
+        if (status !== "ok" && status !== "start" && stats.anomalies.length < 2000)
+          stats.anomalies.push(observation);
         stats.maxGapMs = Math.max(stats.maxGapMs, gap);
         if (seqGap > 1 && seqGap < 3000) {
           stats.maxBurstLoss = Math.max(stats.maxBurstLoss, seqGap - 1);
@@ -147,14 +169,13 @@ export async function diagnose(index) {
               missing: seqGap - 1,
             });
         }
-        if (stats.timeline.length < 1000)
-          stats.timeline.push({
-            no: p.no,
-            time: p.time,
-            gapMs: gap,
-            sequence: p.rtp.seq,
-            pt: p.rtp.pt,
-          });
+        if (stats.count % stats.sampleStep === 0) {
+          stats.timeline.push(observation);
+          if (stats.timeline.length > 1000) {
+            stats.timeline = stats.timeline.filter((_, i) => i % 2 === 0);
+            stats.sampleStep *= 2;
+          }
+        }
         if (stats.previousSeq == null || seqGap < 3000)
           stats.previousSeq = p.rtp.seq;
         stats.last = p.time;

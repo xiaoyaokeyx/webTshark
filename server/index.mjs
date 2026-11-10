@@ -42,6 +42,7 @@ import {
   compareIndexes,
   indexRecords,
 } from "./diagnostics.mjs";
+import { frameReader } from "./index-storage.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 function flagValue(name) {
   const args = process.argv.slice(2);
@@ -529,6 +530,38 @@ const server = http.createServer(async (req, res) => {
           }
           return json(res, report);
         }
+        if (action === "traffic" && method === "GET") {
+          const filter = url.searchParams.get("filter") || "";
+          const { index } = await resolveFilter(c, filter);
+          return json(res, {
+            filter,
+            count: index.count,
+            interval: index.summary.interval,
+            activity: index.summary.activity,
+          });
+        }
+        if (action === "sip-media" && method === "GET") {
+          const calls = new Map();
+          for await (const packet of indexRecords(c.index)) {
+            const id = packet.fields?.["sip.Call-ID"];
+            const raw = packet.fields?.["sip.msg_body"] || "";
+            if (!id || !raw) continue;
+            const body = /^(?:[0-9a-f]{2}:?)+$/i.test(raw)
+              ? Buffer.from(raw.replaceAll(":", ""), "hex").toString("utf8")
+              : raw;
+            const address = body.match(/^c=IN IP[46]\s+([^\s]+)/m)?.[1];
+            const ports = [...body.matchAll(/^m=(?:audio|video)\s+(\d+)\b/gm)]
+              .map((match) => Number(match[1])).filter((port) => port > 0);
+            if (!ports.length || !address) continue;
+            if (!calls.has(id) && calls.size >= 2000) continue;
+            const call = calls.get(id) || { id, media: [] };
+            for (const port of ports)
+              if (!call.media.some((item) => item.address === address && item.port === port))
+                call.media.push({ address, port });
+            calls.set(id, call);
+          }
+          return json(res, { calls: [...calls.values()] });
+        }
         if (action === "locate" && method === "GET") {
           const idx = (
             await resolveFilter(c, url.searchParams.get("filter") || "")
@@ -588,8 +621,28 @@ const server = http.createServer(async (req, res) => {
             !(sortField === "frame.number" && sortDirection === "asc")
               ? { field: sortField, direction: sortDirection }
               : null;
+          const packets = await pageFromIndex(index, page, pageSize, sort);
+          const previous = page > 0
+            ? (await pageFromIndex(index, page * pageSize - 1, 1, sort))[0]
+            : null;
+          let previousTime = previous?.time;
+          for (const packet of packets) {
+            packet.deltaDisplayed = Number.isFinite(previousTime)
+              ? packet.time - previousTime
+              : null;
+            previousTime = packet.time;
+          }
+          if (url.searchParams.get("capturedDelta") === "1" && packets.length) {
+            const reader = await frameReader(c.index);
+            try {
+              for (const packet of [...packets].sort((a, b) => a.no - b.no))
+                packet.deltaCaptured = packet.no > 1
+                  ? packet.time - (await reader.get(packet.no - 1)).record.time
+                  : null;
+            } finally { await reader.close(); }
+          }
           return json(res, {
-            packets: await pageFromIndex(index, page, pageSize, sort),
+            packets,
             total: index.count,
             bytes: index.summary.bytes,
             page,

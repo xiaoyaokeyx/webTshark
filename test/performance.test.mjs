@@ -65,3 +65,22 @@ test("optional persistent tcp contains filtering agrees with TShark and respects
     assert.equal((await buildIndex(capture, 'tcp contains "INVITE"')).filterEngine, "tshark");
   } finally { stopAll(); await rm(dir, { recursive: true, force: true }); }
 });
+
+test("streamed extraction waits for slow consumers and propagates consumer failures", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "webtshark-stream-"));
+  try {
+    await initEngine();
+    const capture = {dir, revision:1, config:{ports:[],mappings:[],decodeAs:[]},processes:new Set()};
+    await writeFile(join(dir,"capture.pcap"),buildCapture({protocol:"RTP",count:2000}));
+    await prepare(capture);
+    const args=[...argsFor(capture),"-T","fields","-e","frame.number"];
+    let count=0;
+    await run(args,{onLine:async line=>{
+      assert.equal(Number(line),++count);
+      if(count%100===0) await new Promise(resolve=>setTimeout(resolve,2));
+    }});
+    assert.equal(count,2000);
+    await assert.rejects(run(args,{onLine:()=>{throw new Error("consumer failed");}}),/consumer failed/);
+    assert.equal(capture.processes.size,0);
+  } finally {stopAll();await rm(dir,{recursive:true,force:true});}
+});

@@ -1,4 +1,24 @@
 // Call identity is independent of packet order: interleaved dialogs must stay together.
+export function sipDisplayFilter(filter = "") {
+  const value = filter.trim();
+  return !value || value === "sip" ? "sip" : `(${value}) && sip`;
+}
+
+export function selectSipCalls(calls, { search = "", status = "all", sort = "start" } = {}) {
+  const query = search.toLowerCase().trim();
+  const matching = calls.filter((call) =>
+    (status === "all" || call.status === status) &&
+    (!query || `${call.callId} ${call.endpoints.join(" ")} ${call.status}`.toLowerCase().includes(query)),
+  );
+  const compare = {
+    start: (a, b) => a.start - b.start,
+    newest: (a, b) => b.start - a.start,
+    duration: (a, b) => b.duration - a.duration,
+    packets: (a, b) => b.packets.length - a.packets.length,
+  }[sort] || ((a, b) => a.start - b.start);
+  return matching.sort((a, b) => compare(a, b) || a.index - b.index);
+}
+
 export function sipMessage(packet) {
   const fields = packet.fields || {};
   const info = String(packet.info || "")
@@ -85,7 +105,7 @@ export function buildSipCalls(packets) {
     const connected = inviteResponses.some(
       (m) => m.code >= 200 && m.code < 300,
     );
-    const failedSetup = !connected && inviteResponses.some((m) => m.code >= 300);
+    const failedSetup = !connected && inviteResponses.some((m) => m.code >= 300 && m.code !== 401 && m.code !== 407);
     let status = "建立中";
     if (connected) status = has("BYE") ? "已结束" : "已接通";
     else if (has("BYE") && !failedSetup) status = "已结束";
@@ -93,6 +113,15 @@ export function buildSipCalls(packets) {
     else if (failedSetup) status = "呼叫失败";
     else if (messages.some((m) => m.code === 180 || m.code === 183))
       status = "振铃中";
+    else if (inviteResponses.some((m) => m.code === 401 || m.code === 407))
+      status = "认证中";
+    else if (firstInviteIndex < 0 && !inviteResponses.length) {
+      const responses = messages.filter((m) => m.code >= 200);
+      const lastCode = responses.at(-1)?.code;
+      status = lastCode === 401 || lastCode === 407 ? "认证中"
+        : lastCode >= 300 ? "事务失败"
+          : lastCode >= 200 ? "事务完成" : "仅信令";
+    }
     const firstResponse = inviteResponsePackets[0];
     const ringing = inviteResponsePackets.find(
       ({ message }) => message.code === 180 || message.code === 183,

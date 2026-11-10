@@ -14,7 +14,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { Modal, Notice, IconButton } from "./ui.jsx";
-import { sizeLabel, downloadBlob } from "./api.js";
+import { api, sizeLabel, downloadBlob } from "./api.js";
 export function MappingEditor({ stream, existing, codecs, onSave, onClose }) {
   const [pt, setPt] = useState(
       existing?.pt ?? stream?.pts?.find((p) => p >= 96) ?? 96,
@@ -427,6 +427,8 @@ function RtpWaveform({
   data,
   stream,
   audio,
+  paired,
+  pairedAudioRef,
   audioRef,
   playbackTime,
   playbackDuration,
@@ -434,6 +436,8 @@ function RtpWaveform({
   onTimeModeChange,
   onTimeUpdate,
   onLoadedMetadata,
+  onPlay,
+  onPause,
   onSeek,
   onRestart,
   onLocatePacket,
@@ -441,6 +445,7 @@ function RtpWaveform({
 }) {
   const [zoom, setZoom] = useState(1);
   const scrollRef = useRef(null);
+  const pairedScrollRef = useRef(null);
   const axisScrollRef = useRef(null);
   const [scrollMetrics, setScrollMetrics] = useState({
     left: 0,
@@ -483,6 +488,7 @@ function RtpWaveform({
     1,
     ...packets.map((packet) => Math.max(Math.abs(packet.min), Math.abs(packet.max))),
   );
+  const pairedMaxLevel = paired ? Math.max(1, ...paired.data.packets.map((packet) => Math.max(Math.abs(packet.min), Math.abs(packet.max)))) : 1;
   const yFor = (value) => mid - (value / maxLevel) * (plotHeight * 0.44);
   const first = packets[0];
   const last = packets.at(-1);
@@ -573,6 +579,8 @@ function RtpWaveform({
     const node = event.currentTarget;
     if (axisScrollRef.current && axisScrollRef.current.scrollLeft !== node.scrollLeft)
       axisScrollRef.current.scrollLeft = node.scrollLeft;
+    if (pairedScrollRef.current && pairedScrollRef.current.scrollLeft !== node.scrollLeft)
+      pairedScrollRef.current.scrollLeft = node.scrollLeft;
     setScrollMetrics({
       left: node.scrollLeft,
       viewport: node.clientWidth,
@@ -758,6 +766,23 @@ function RtpWaveform({
             <text x={plotLeft - 6} y={height - plotBottom + 4} textAnchor="end" className="rtp-waveform-label">−</text>
           </svg>
         </div>
+        {paired && <div className="rtp-paired-waveform" aria-label="反向 RTP 波形">
+          <strong>{paired.stream.source}:{paired.stream.srcPort} → {paired.stream.destination}:{paired.stream.dstPort}</strong>
+          <div className="rtp-paired-scroll" ref={pairedScrollRef} onScroll={(event) => {
+            if (scrollRef.current) scrollRef.current.scrollLeft = event.currentTarget.scrollLeft;
+          }}>
+            <svg viewBox="0 0 1000 100" style={{ width: `${zoom * 100}%`, minWidth: `${zoom * 100}%` }} role="img" aria-label="反向 RTP 音频波形">
+              <line x1="26" x2="988" y1="50" y2="50" stroke="#d9c9ed" />
+              {(paired.data.packets || []).map((packet, index) => {
+                const pairOffset = Number(paired.data.startTime) - firstTime;
+                const ratio = (Number(packet.offset ?? (packet.time - paired.data.startTime)) + pairOffset) / Math.max(.001, mediaDuration);
+                const x = 26 + Math.max(0, Math.min(1, ratio)) * 962;
+                return <line key={`${packet.no}-${index}`} x1={x} x2={x} y1={50 - packet.max / pairedMaxLevel * 42} y2={50 - packet.min / pairedMaxLevel * 42} stroke="#8f65d4" strokeWidth="1.2" onDoubleClick={() => onLocatePacket?.(packet.no, paired.stream.filter)} />;
+              })}
+              <line x1={playheadX} x2={playheadX} y1="3" y2="97" stroke="#3670ef" strokeWidth="1.5" />
+            </svg>
+          </div>
+        </div>}
         <div
           className="rtp-waveform-axis-scroll"
           ref={axisScrollRef}
@@ -846,6 +871,14 @@ function RtpWaveform({
                   <td>{data.clockRate || stream?.clockRate || "—"} Hz</td>
                   <td>{data.codec || "—"}</td>
                 </tr>
+                {paired && <tr>
+                  <td>反向</td>
+                  <td>{paired.stream.source}</td><td>{paired.stream.srcPort}</td>
+                  <td>{paired.stream.destination}</td><td>{paired.stream.dstPort}</td>
+                  <td><code>{paired.stream.ssrc}</code></td><td>{paired.stream.packets}</td>
+                  <td>{formatRelativeClock(paired.data.duration || 0)}</td>
+                  <td>{paired.data.clockRate || paired.stream.clockRate || "—"} Hz</td><td>{paired.data.codec}</td>
+                </tr>}
               </tbody>
             </table>
           </div>
@@ -867,7 +900,10 @@ function RtpWaveform({
             src={audio?.url}
             onTimeUpdate={onTimeUpdate}
             onLoadedMetadata={onLoadedMetadata}
+            onPlay={onPlay}
+            onPause={onPause}
           />
+          {paired && <><audio ref={pairedAudioRef} src={paired.audio.url} preload="auto" /><label className="rtp-pair-mute"><input type="checkbox" defaultChecked onChange={(event) => { if (pairedAudioRef.current) pairedAudioRef.current.muted = !event.target.checked; }} />反向流声音</label></>}
           {audio && (
             <button
               className="button secondary"
@@ -893,8 +929,13 @@ export default function RtpPanel({
   onLocatePacket,
 }) {
   const audioRef = useRef(null);
+  const pairedAudioRef = useRef(null);
   const [audio, setAudio] = useState(null),
     [waveform, setWaveform] = useState(null),
+    [paired, setPaired] = useState(null),
+    [sipCalls, setSipCalls] = useState(null),
+    [selectedCallId, setSelectedCallId] = useState(""),
+    [callsLoading, setCallsLoading] = useState(false),
     [mediaLoading, setMediaLoading] = useState(null),
     [playbackTime, setPlaybackTime] = useState(0),
     [playbackDuration, setPlaybackDuration] = useState(0),
@@ -902,6 +943,9 @@ export default function RtpPanel({
   useEffect(() => {
     setAudio(null);
     setWaveform(null);
+    setPaired(null);
+    setSipCalls(null);
+    setSelectedCallId("");
     setMediaLoading(null);
     setPlaybackTime(0);
     setPlaybackDuration(0);
@@ -913,16 +957,41 @@ export default function RtpPanel({
     },
     [audio],
   );
+  useEffect(() => () => { if (paired?.audio.url) URL.revokeObjectURL(paired.audio.url); }, [paired]);
   const streams = capture.summary?.media || [];
+  const selectedCall = sipCalls?.find((call) => call.id === selectedCallId);
+  const directCallStreams = selectedCall ? streams.map((stream, index) => ({ stream, index }))
+    .filter(({ stream }) => selectedCall.media.some(({ address, port }) =>
+      (stream.source === address && stream.srcPort === port)
+      || (stream.destination === address && stream.dstPort === port)))
+    .map(({ index }) => index) : [];
+  const callStreamIndexes = new Set(directCallStreams);
+  for (const index of directCallStreams) {
+    const reverse = streams.findIndex((candidate, i) => i !== index
+      && candidate.source === streams[index].destination
+      && candidate.destination === streams[index].source
+      && candidate.start <= streams[index].end + 2
+      && candidate.end >= streams[index].start - 2);
+    if (reverse >= 0) callStreamIndexes.add(reverse);
+  }
+  async function loadSipCalls() {
+    setCallsLoading(true);
+    try {
+      const result = await api(`/captures/${capture.id}/sip-media`);
+      setSipCalls(result.calls);
+    } catch (e) { onError(e.message); }
+    finally { setCallsLoading(false); }
+  }
   const closeMedia = useCallback(() => {
     setAudio(null);
     setWaveform(null);
+    setPaired(null);
     setPlaybackTime(0);
     setPlaybackDuration(0);
     setTimeMode("relative");
   }, []);
-  async function openMedia(index) {
-    if (audio?.index === index && waveform?.stream === index) {
+  async function openMedia(index, pairedIndex = null) {
+    if (audio?.index === index && waveform?.stream === index && (paired?.index ?? null) === pairedIndex) {
       closeMedia();
       return;
     }
@@ -940,13 +1009,20 @@ export default function RtpPanel({
         throw new Error(data.error || "音频解码失败");
       }
       const blob = await audioRes.blob();
-      setAudio({
-        index,
-        blob,
-        url: URL.createObjectURL(blob),
-        name: `rtp-${streams[index].ssrc}.wav`,
-      });
+      let pair = null;
+      if (pairedIndex != null) {
+        const [pairWaveRes, pairAudioRes] = await Promise.all([
+          fetch(`/api/captures/${capture.id}/waveform?stream=${pairedIndex}`),
+          fetch(`/api/captures/${capture.id}/audio?stream=${pairedIndex}`),
+        ]);
+        if (!pairWaveRes.ok || !pairAudioRes.ok) throw new Error("反向媒体流无法解码");
+        const pairData = await pairWaveRes.json();
+        const pairBlob = await pairAudioRes.blob();
+        pair = { index: pairedIndex, data: pairData, stream: streams[pairedIndex], audio: { url: URL.createObjectURL(pairBlob), blob: pairBlob } };
+      }
+      setAudio({ index, blob, url: URL.createObjectURL(blob), name: `rtp-${streams[index].ssrc}.wav` });
       setWaveform(waveformData);
+      setPaired(pair);
       setPlaybackTime(0);
       setPlaybackDuration(0);
     } catch (e) {
@@ -959,17 +1035,42 @@ export default function RtpPanel({
     setPlaybackTime(event.currentTarget.currentTime || 0);
     if (Number.isFinite(event.currentTarget.duration))
       setPlaybackDuration(event.currentTarget.duration);
+    syncPairedAudio(event.currentTarget);
+  }
+  function syncPairedAudio(primary) {
+    const secondary = pairedAudioRef.current;
+    if (!secondary || !paired || !waveform) return;
+    const offset = Number(paired.data.startTime) - Number(waveform.startTime);
+    const target = primary.currentTime - offset;
+    if (target < 0 || target >= (Number.isFinite(secondary.duration) ? secondary.duration : Infinity)) {
+      secondary.pause();
+      return;
+    }
+    if (primary.paused || secondary.paused || Math.abs(secondary.currentTime - target) > .12)
+      secondary.currentTime = Math.max(0, target);
+    if (primary.paused) secondary.pause();
+    else if (secondary.paused) secondary.play().catch(() => {});
   }
   function seekPlayback(seconds) {
     if (!audioRef.current) return;
     audioRef.current.currentTime = Math.max(0, seconds);
     setPlaybackTime(Math.max(0, seconds));
+    syncPairedAudio(audioRef.current);
   }
   function restartPlayback() {
     if (!audioRef.current) return;
     audioRef.current.currentTime = 0;
     setPlaybackTime(0);
+    syncPairedAudio(audioRef.current);
     audioRef.current.play().catch(() => {});
+  }
+  function reverseStreamIndex(stream, index) {
+    const matches = streams.map((candidate, i) => ({ candidate, i }))
+      .filter(({ candidate, i }) => i !== index && candidate.source === stream.destination && candidate.destination === stream.source
+        && candidate.start <= stream.end + 2 && candidate.end >= stream.start - 2
+        && candidate.codecs.every((codec) => ["PCMA", "PCMU"].includes(codec)));
+    matches.sort((a, b) => Math.abs(a.candidate.start - stream.start) - Math.abs(b.candidate.start - stream.start));
+    return matches[0]?.i ?? null;
   }
   return (
     <section className="analysis-content">
@@ -992,6 +1093,14 @@ export default function RtpPanel({
             RTP 媒体流 <span className="count-badge">{streams.length}</span>
           </h2>
           <span>单向五元组 + SSRC · 丢包数为序列号估算</span>
+        </div>
+        <div className="rtp-call-selector">
+          <button className="button secondary" disabled={callsLoading} onClick={loadSipCalls}>{callsLoading ? "关联中…" : "按 SIP 通话查找媒体"}</button>
+          {sipCalls && <select aria-label="选择 SIP 通话" value={selectedCallId} onChange={(event) => setSelectedCallId(event.target.value)}>
+            <option value="">全部媒体流</option>
+            {sipCalls.map((call) => <option key={call.id} value={call.id}>{call.id}</option>)}
+          </select>}
+          {selectedCall && <span>关联 {callStreamIndexes.size} 条媒体流 · 按 SDP 地址和端口匹配</span>}
         </div>
         {!streams.length ? (
           <div className="empty-state">
@@ -1017,7 +1126,7 @@ export default function RtpPanel({
                 </tr>
               </thead>
               <tbody>
-                {streams.map((s, i) => (
+                {streams.map((s, i) => ({ s, i })).filter(({ i }) => !selectedCall || callStreamIndexes.has(i)).map(({ s, i }) => (
                   <tr key={s.key}>
                     <td>
                       <div className="media-address">
@@ -1099,6 +1208,12 @@ export default function RtpPanel({
                               ? "收起试听"
                               : "试听"}
                         </button>
+                        {reverseStreamIndex(s, i) != null && s.codecs.every((codec) => ["PCMA", "PCMU"].includes(codec)) && <button
+                          className="text-button"
+                          disabled={mediaLoading !== null}
+                          onClick={() => openMedia(i, reverseStreamIndex(s, i))}
+                          title="同步播放当前媒体与反向媒体"
+                        >双向播放</button>}
                       </div>
                     </td>
                   </tr>
@@ -1113,6 +1228,8 @@ export default function RtpPanel({
           data={waveform}
           stream={streams[waveform.stream]}
           audio={audio}
+          paired={paired}
+          pairedAudioRef={pairedAudioRef}
           audioRef={audioRef}
           playbackTime={playbackTime}
           playbackDuration={playbackDuration}
@@ -1123,6 +1240,8 @@ export default function RtpPanel({
             if (Number.isFinite(event.currentTarget.duration))
               setPlaybackDuration(event.currentTarget.duration);
           }}
+          onPlay={(event) => syncPairedAudio(event.currentTarget)}
+          onPause={() => pairedAudioRef.current?.pause()}
           onSeek={seekPlayback}
           onRestart={restartPlayback}
           onLocatePacket={onLocatePacket}

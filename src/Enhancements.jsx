@@ -541,19 +541,19 @@ export function FeaturePanel({
           </>
         )}
         {kind === "diagnose" && data && (
-          <details>
-            <summary>RTP 时间线、突发缺口、时钟漂移与 RTCP 关联</summary>
+          <details className="rtp-quality-detail">
+            <summary>RTP 逐包质量与异常定位</summary>
             {(data.rtpQuality || []).map((s) => (
-              <section key={s.key}>
+              <section className="rtp-quality-stream" key={s.key}>
                 <p>
                   {s.key} · 最大到达间隔 {s.maxGapMs.toFixed(2)} ms ·
                   最大观测缺口 {s.maxBurstLoss} · 漂移{" "}
                   {s.estimatedClockDriftPpm?.toFixed(1) ?? "未知"} ppm
                 </p>
                 <svg
-                  viewBox="0 0 600 100"
+                  viewBox="0 0 600 120"
                   role="img"
-                  aria-label={`SSRC ${s.ssrc} 包间隔时间线`}
+                  aria-label={`SSRC ${s.ssrc} 全程到达间隔与抖动`}
                 >
                   <polyline
                     fill="none"
@@ -561,12 +561,33 @@ export function FeaturePanel({
                     strokeWidth="1.5"
                     points={s.timeline
                       .map(
-                        (p, i) =>
-                          `${(i / Math.max(1, s.timeline.length - 1)) * 600},${95 - Math.min(90, (p.gapMs / Math.max(1, s.maxGapMs)) * 90)}`,
+                        (p) =>
+                          `${((p.time - s.first) / Math.max(.000001, s.last - s.first)) * 600},${110 - Math.min(100, (p.gapMs / Math.max(1, s.maxGapMs)) * 100)}`,
                       )
                       .join(" ")}
                   />
+                  <polyline
+                    fill="none" stroke="#8f65d4" strokeWidth="1.5"
+                    points={s.timeline.map((p) =>
+                      `${((p.time - s.first) / Math.max(.000001, s.last - s.first)) * 600},${110 - Math.min(100, ((p.jitterMs || 0) / Math.max(1, s.maxGapMs)) * 100)}`,
+                    ).join(" ")}
+                  />
                 </svg>
+                <p>蓝色：包到达间隔 · 紫色：抖动 · 已按整条流抽样 · 异常 {s.anomalies?.length || 0} 个</p>
+                <div className="rtp-quality-table-wrap">
+                  <table className="analysis-table">
+                    <thead><tr><th>包号</th><th>时间 (s)</th><th>Seq</th><th>间隔 (ms)</th><th>抖动 (ms)</th><th>状态</th></tr></thead>
+                    <tbody>{(s.anomalies || []).map((p) => (
+                      <tr key={p.no}>
+                        <td><button className="text-button accent-text" onClick={() => { onLocate(p.no); onClose(); }}>#{p.no}</button></td>
+                        <td>{p.time.toFixed(6)}</td><td>{p.sequence}</td>
+                        <td>{p.gapMs.toFixed(2)}</td><td>{p.jitterMs?.toFixed(2) ?? "—"}</td>
+                        <td>{p.status.startsWith("gap:") ? `缺口 ${p.status.slice(4)} 包` : ({ duplicate: "重复", reordered: "乱序", late: "到达间隔过长" }[p.status] || p.status)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                  {!s.anomalies?.length && <p>未发现序列异常或超过 100 ms 的到达间隔。</p>}
+                </div>
                 <p>RTCP 包：{s.rtcpPackets.join(", ") || "未捕获"}</p>
               </section>
             ))}
