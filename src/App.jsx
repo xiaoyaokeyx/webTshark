@@ -28,7 +28,6 @@ import {
   Layers3,
   ListFilter,
   LoaderCircle,
-  MoreHorizontal,
   Network,
   PanelLeftClose,
   PhoneCall,
@@ -2504,6 +2503,12 @@ export default function App() {
                       <Layers3 size={16} />
                       <h2>数据包列表</h2>
                       <span className="count-badge">{total}</span>
+                      <small
+                        className="packet-context-hint"
+                        title="在数据包行上右键，可直接设置过滤器、追踪流、解码或标记"
+                      >
+                        右键数据包行：过滤 · 追踪 · 解码
+                      </small>
                       {loading && (
                         <span className="filtered-label">筛选中…</span>
                       )}
@@ -2664,86 +2669,56 @@ export default function App() {
                           </details>
                         </div>
                       </PacketMenu>
-                      <PacketMenu label="列表操作" className="packet-list-menu">
+                      <div className="packet-quick-actions" role="group" aria-label="数据包列表快捷操作">
                         <button
-                          className={`text-button ${compareMode ? "accent-text" : ""}`}
-                          aria-label={
-                            compareMode
-                              ? `选择比较数据包 ${compareSelection.length}/2`
-                              : "进入数据包比较模式"
-                          }
-                          title={
-                            compareMode
-                              ? "点击两行选择数据包"
-                              : "选择两个数据包进行比较"
-                          }
+                          type="button"
+                          className={`packet-toolbar-control ${compareMode ? "is-active" : ""}`}
+                          aria-pressed={compareMode}
+                          title={compareMode ? "点击两条数据包进行比较；再次点击退出" : "选择两个数据包进行比较"}
                           onClick={() => {
-                            setCompareMode(!compareMode);
                             if (compareMode) setCompareSelection([]);
+                            setCompareMode(!compareMode);
                           }}
                         >
                           <GitCompareArrows size={14} />
-                          <span>
-                            {compareMode
-                              ? `选择中 ${compareSelection.length}/2`
-                              : "包比较"}
-                          </span>
+                          <span>{compareMode ? `比较包 ${compareSelection.length}/2` : "包比较"}</span>
                         </button>
+                        {compareSelection.length === 2 && (
+                          <button
+                            type="button"
+                            className="packet-toolbar-control"
+                            aria-label={sipCompare ? "比较 SIP 头域和 SDP" : "查看数据包差异"}
+                            onClick={() => setModal("compare")}
+                          >
+                            <GitCompareArrows size={14} />
+                            <span>{sipCompare ? "SIP 对比" : "查看差异"}</span>
+                          </button>
+                        )}
                         <button
-                          className="text-button"
-                          aria-label={
-                            sipCompare
-                              ? "比较选中 SIP 数据包的头域和 SDP"
-                              : "比较选中的两个数据包"
-                          }
-                          title={
-                            sipCompare
-                              ? "比较 SIP 头域和 SDP 原始行"
-                              : "查看两个选中数据包的差异"
-                          }
-                          disabled={compareSelection.length !== 2}
-                          onClick={() => setModal("compare")}
-                        >
-                          <GitCompareArrows size={14} />
-                          <span>
-                            {sipCompare ? "SIP 头域/SDP" : "查看差异"}
-                          </span>
-                        </button>
-                        <button
-                          className={`text-button ${markedOnly ? "accent-text" : ""}`}
+                          type="button"
+                          className={`packet-toolbar-control ${markedOnly ? "is-active" : ""}`}
+                          aria-pressed={markedOnly}
+                          title="只显示已标记的数据包"
                           onClick={() => {
                             setMarkedOnly(!markedOnly);
                             setQuery((q) => ({ ...q, page: 0 }));
                           }}
                         >
-                          <Star
-                            size={14}
-                            fill={markedOnly ? "currentColor" : "none"}
-                          />
+                          <Star size={14} fill={markedOnly ? "currentColor" : "none"} />
                           <span>仅看标记</span>
-                          {bookmarked.size > 0 && (
-                            <small>{bookmarked.size}</small>
-                          )}
+                          {bookmarked.size > 0 && <small>{bookmarked.size}</small>}
                         </button>
-                        <span className="tool-divider" />
-                        <IconButton
-                          icon={ListFilter}
-                          label="切换协议行着色"
-                          active={colors}
+                        <button
+                          type="button"
+                          className={`icon-button packet-color-toggle ${colors ? "is-active" : ""}`}
+                          aria-label="协议行着色"
+                          aria-pressed={colors}
+                          title={`协议行着色：${colors ? "已开启" : "已关闭"}。点击切换`}
                           onClick={() => setColors(!colors)}
-                        />
-                        <IconButton
-                          icon={Columns3}
-                          label="数据包列与时间设置"
-                          onClick={() => setModal("columns")}
-                        />
-                        <IconButton
-                          icon={MoreHorizontal}
-                          label="当前数据包操作"
-                          disabled={!selected}
-                          onClick={(e) => contextFor(e, selected)}
-                        />
-                      </PacketMenu>
+                        >
+                          <ListFilter size={15} aria-hidden="true" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div
@@ -3310,6 +3285,7 @@ export default function App() {
           onRtp={rtpContext}
           onDecodeAs={openDecodeAs}
           onColumn={(field, label) => addColumn(field, label)}
+          onColumns={() => setModal("columns")}
           onCopy={copy}
           onMark={mark}
           onTimeReference={(packet) => {

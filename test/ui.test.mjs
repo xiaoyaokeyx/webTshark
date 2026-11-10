@@ -116,6 +116,10 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       undefined,
       "less frequent tools stay in the menu",
     );
+    assert.ok(button("包比较"), "packet comparison is beside batch/history");
+    assert.ok(button("仅看标记"), "marked-packet filter is in the toolbar");
+    assert.ok(button("协议行着色"), "protocol coloring has a toolbar icon");
+    assert.equal(button("列表操作"), undefined, "list operations menu is removed");
     assert.ok(!document.querySelector(".packet-menu-popup"));
     await click(button("工具"));
     assert.ok(button("报文构造器"));
@@ -155,8 +159,18 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
     await click(button("过滤选项"));
     assert.equal(button("TCP").getAttribute("aria-pressed"), "false");
     await click(button("过滤选项"));
-    await click(button("列表操作"));
-    await click(button("数据包列与时间设置"));
+    const firstPacketRow = document.querySelector(".packet-table tbody tr");
+    await act(() =>
+      firstPacketRow.dispatchEvent(
+        new dom.window.MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY: 100,
+        }),
+      ),
+    );
+    await click(button("数据包列与时间"));
     await select(document.querySelector("#time-format"), "epoch");
     const infoColumn = document.querySelector('[aria-label="显示 信息"]');
     await act(() =>
@@ -196,8 +210,17 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       ),
       false,
     );
-    await click(button("列表操作"));
-    await click(button("数据包列与时间设置"));
+    await act(() =>
+      firstPacketRow.dispatchEvent(
+        new dom.window.MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 100,
+          clientY: 100,
+        }),
+      ),
+    );
+    await click(button("数据包列与时间"));
     await click(button("恢复默认列"));
     await click(button("完成"));
     assert.ok(
@@ -205,19 +228,16 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
         th.textContent.includes("信息"),
       ),
     );
-    await click(button("列表操作"));
     await click(button("包比较"));
     await click(document.querySelector(".packet-table tbody tr"));
     await click(document.querySelectorAll(".packet-table tbody tr")[1]);
-    await click(button("列表操作"));
     await click(button("查看差异"));
     assert.match(
       document.querySelector('[role="dialog"]').textContent,
       /比较数据包 #/,
     );
     await click(button("完成", document.querySelector('[role="dialog"]')));
-    await click(button("列表操作"));
-    await click(button("选择中 2/2"));
+    await click(button("比较包 2/2"));
     await click(button("长度"));
     const row = [...document.querySelectorAll(".packet-table tbody tr")].find(
       (r) => r.cells[0].textContent === "49",
@@ -237,6 +257,14 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       document.querySelector(".context-caption code").textContent,
       "ip.src == 10.10.0.10",
     );
+    assert.ok(button("应用为过滤器"), "filter actions are in a submenu");
+    assert.ok(button("准备为过滤器"), "prepare actions are in a submenu");
+    await click(button("应用为过滤器"));
+    assert.ok(
+      document.querySelector('[data-submenu="apply"]'),
+      "opening the filter submenu shows its operators",
+    );
+    assert.ok(button("与当前条件组合（AND）"));
     assert.ok(button("应用为列"), "field context menu exposes apply as column");
     assert.ok(button("解码为…"), "transport context menu exposes Decode As");
     await click(button("解码为…"));
@@ -268,6 +296,11 @@ test("UI boots on real capture; right-click filters, error recovery and per-stre
       ),
     );
     await click(button("应用为过滤器"));
+    await click(
+      document.querySelector(
+        '[data-submenu="apply"] .context-submenu-item',
+      ),
+    );
     await wait(
       () => document.querySelectorAll(".packet-table tbody tr").length === 69,
       "context filter",

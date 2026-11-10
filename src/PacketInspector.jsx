@@ -43,11 +43,18 @@ export function ContextMenu({
   onRtp,
   onDecodeAs,
   onColumn,
+  onColumns,
   onCopy,
   onMark,
   onTimeReference,
 }) {
   const ref = useRef(null);
+  const [openSubmenu, setOpenSubmenuState] = useState(null);
+  const openSubmenuRef = useRef(null);
+  const setOpenSubmenu = (next) => {
+    openSubmenuRef.current = next;
+    setOpenSubmenuState(next);
+  };
   useEffect(() => {
     const el = ref.current;
     el?.querySelector("button")?.focus();
@@ -57,7 +64,38 @@ export function ContextMenu({
     const key = (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        const active = openSubmenuRef.current;
+        if (active) {
+          setOpenSubmenu(null);
+          requestAnimationFrame(() =>
+            el?.querySelector(`[data-submenu-trigger="${active}"]`)?.focus(),
+          );
+        } else onClose();
+        return;
+      }
+      if (e.key === "ArrowRight") {
+        const trigger = e.target.closest?.("[data-submenu-trigger]");
+        if (trigger) {
+          e.preventDefault();
+          const id = trigger.dataset.submenuTrigger;
+          setOpenSubmenu(id);
+          requestAnimationFrame(() =>
+            el?.querySelector(`[data-submenu="${id}"] button:not(:disabled)`)?.focus(),
+          );
+          return;
+        }
+      }
+      if (e.key === "ArrowLeft") {
+        const submenu = e.target.closest?.("[data-submenu]");
+        if (submenu) {
+          e.preventDefault();
+          const id = submenu.dataset.submenu;
+          setOpenSubmenu(null);
+          requestAnimationFrame(() =>
+            el?.querySelector(`[data-submenu-trigger="${id}"]`)?.focus(),
+          );
+          return;
+        }
       }
       if (["ArrowDown", "ArrowUp"].includes(e.key)) {
         e.preventDefault();
@@ -82,6 +120,66 @@ export function ContextMenu({
     onFilter(context.condition, mode, prepare);
     onClose();
   };
+  const applyFilterOptions = [
+    ["replace", "应用为过滤器"],
+    ["exclude", "排除此条件"],
+    ["and", "与当前条件组合（AND）"],
+    ["or", "与当前条件组合（OR）"],
+    ["and-not", "与当前条件组合并排除"],
+  ];
+  const prepareFilterOptions = [
+    ["replace", "仅填入过滤栏，暂不应用"],
+    ["exclude", "准备为过滤器：非选中"],
+    ["and", "准备为过滤器：且选中"],
+    ["or", "准备为过滤器：或选中"],
+    ["and-not", "准备为过滤器：且非选中"],
+  ];
+  const renderFilterSubmenu = (id, title, options, prepare = false) => (
+    <div
+      key={id}
+      className={`context-submenu-wrap ${context.x > window.innerWidth - 560 ? "opens-left" : "opens-right"}`}
+      onMouseEnter={() => setOpenSubmenu(id)}
+      onMouseLeave={() => {
+        if (openSubmenuRef.current === id) setOpenSubmenu(null);
+      }}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        className="context-submenu-trigger"
+        aria-haspopup="menu"
+        aria-expanded={openSubmenu === id}
+        data-submenu-trigger={id}
+        onClick={() => setOpenSubmenu(openSubmenuRef.current === id ? null : id)}
+      >
+        <Filter size={14} />
+        <span>{title}</span>
+        <ChevronRight size={14} aria-hidden="true" />
+      </button>
+      {openSubmenu === id && (
+        <div
+          role="menu"
+          aria-label={title}
+          className="context-submenu"
+          data-submenu={id}
+        >
+          {options.map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              role="menuitem"
+              className="context-submenu-item"
+              disabled={!context.condition}
+              onClick={() => action(mode, prepare)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+  const left = Math.max(8, Math.min(context.x, window.innerWidth - 300));
   return (
     <div
       ref={ref}
@@ -89,7 +187,7 @@ export function ContextMenu({
       aria-label="数据包右键菜单"
       className="context-menu"
       style={{
-        left: Math.max(8, Math.min(context.x, window.innerWidth - 300)),
+        left,
         top: Math.max(8, Math.min(context.y, window.innerHeight - 440)),
       }}
     >
@@ -97,39 +195,13 @@ export function ContextMenu({
         {context.label || "选择的字段"}
         <code>{context.condition || "该字段不能生成过滤表达式"}</code>
       </div>
-      {[
-        ["replace", "应用为过滤器"],
-        ["exclude", "排除此条件"],
-        ["and", "与当前条件组合（AND）"],
-        ["or", "或当前条件（OR）"],
-        ["and-not", "与当前条件组合并排除"],
-      ].map(([mode, text]) => (
-        <button
-          key={mode}
-          role="menuitem"
-          disabled={!context.condition}
-          onClick={() => action(mode)}
-        >
-          <Filter size={14} />
-          {text}
-        </button>
-      ))}
-      {[
-        ["replace", "仅填入过滤栏，暂不应用"],
-        ["exclude", "准备为过滤器：非选中"],
-        ["and", "准备为过滤器：且选中"],
-        ["or", "准备为过滤器：或选中"],
-        ["and-not", "准备为过滤器：且非选中"],
-      ].map(([mode, label]) => (
-        <button
-          key={`prepare-${mode}`}
-          role="menuitem"
-          disabled={!context.condition}
-          onClick={() => action(mode, true)}
-        >
-          {label}
-        </button>
-      ))}
+      {renderFilterSubmenu("apply", "应用为过滤器", applyFilterOptions)}
+      {renderFilterSubmenu(
+        "prepare",
+        "准备为过滤器",
+        prepareFilterOptions,
+        true,
+      )}
       <button
         role="menuitem"
         disabled={!context.columnField}
@@ -140,6 +212,16 @@ export function ContextMenu({
       >
         <Columns3 size={14} />
         应用为列
+      </button>
+      <button
+        role="menuitem"
+        onClick={() => {
+          onColumns?.();
+          onClose();
+        }}
+      >
+        <Columns3 size={14} />
+        数据包列与时间
       </button>
       <div className="context-divider" />
       <button
